@@ -31,13 +31,15 @@ ASYNC_LOW_LATENCY = 1 << 13
 CMSPAR = 0o10000000000
 TCGETS = 0x5401
 
+IS_POWERPC = os.uname().machine.startswith("ppc")
+
 _IOC_NRBITS = 8
 _IOC_TYPEBITS = 8
 _IOC_SIZEBITS = 14
 _IOC_WRITE = 1
 _IOC_READ = 2
 
-if os.uname().machine.startswith("ppc"):
+if IS_POWERPC:
     _IOC_SIZEBITS = 13
     _IOC_WRITE = 4
 
@@ -58,8 +60,14 @@ def _ioc(direction: int, request_type: int, number: int, size: int) -> int:
 
 TIOCGSERIAL = getattr(termios, "TIOCGSERIAL", None)
 TIOCSSERIAL = getattr(termios, "TIOCSSERIAL", None)
-CBAUD = getattr(termios, "CBAUD", 0o00010017)
-CBAUDEX = getattr(termios, "CBAUDEX", 0o00010000)
+if IS_POWERPC:
+    CBAUD = 0x000000FF
+    CBAUDEX = 0x00000000
+    BOTHER = 0x0000001F
+else:
+    CBAUD = getattr(termios, "CBAUD", 0o00010017)
+    CBAUDEX = getattr(termios, "CBAUDEX", 0o00010000)
+    BOTHER = getattr(termios, "BOTHER", CBAUDEX)
 
 # When we need to set a non-POSIX baudrate, we set the baudrates to a known default and
 # then override
@@ -76,20 +84,37 @@ class Termios2Struct(ctypes.Structure):
 
     _pack_ = 1
     _layout_ = "ms"
-    _fields_ = (
-        ("c_iflag", ctypes.c_uint32),
-        ("c_oflag", ctypes.c_uint32),
-        ("c_cflag", ctypes.c_uint32),
-        ("c_lflag", ctypes.c_uint32),
-        ("c_line", ctypes.c_uint8),
-        ("c_cc", ctypes.c_uint8 * NCCS),
-        ("c_ispeed", ctypes.c_uint32),
-        ("c_ospeed", ctypes.c_uint32),
-    )
+
+    if IS_POWERPC:
+        _fields_ = (
+            ("c_iflag", ctypes.c_uint32),
+            ("c_oflag", ctypes.c_uint32),
+            ("c_cflag", ctypes.c_uint32),
+            ("c_lflag", ctypes.c_uint32),
+            ("c_cc", ctypes.c_uint8 * NCCS),
+            ("c_line", ctypes.c_uint8),
+            ("c_ispeed", ctypes.c_uint32),
+            ("c_ospeed", ctypes.c_uint32),
+        )
+    else:
+        _fields_ = (
+            ("c_iflag", ctypes.c_uint32),
+            ("c_oflag", ctypes.c_uint32),
+            ("c_cflag", ctypes.c_uint32),
+            ("c_lflag", ctypes.c_uint32),
+            ("c_line", ctypes.c_uint8),
+            ("c_cc", ctypes.c_uint8 * NCCS),
+            ("c_ispeed", ctypes.c_uint32),
+            ("c_ospeed", ctypes.c_uint32),
+        )
 
 
-TCGETS2 = _ioc(_IOC_READ, ord("T"), 0x2A, ctypes.sizeof(Termios2Struct))
-TCSETS2 = _ioc(_IOC_WRITE, ord("T"), 0x2B, ctypes.sizeof(Termios2Struct))
+if IS_POWERPC:
+    TCGETS2 = _ioc(_IOC_READ, ord("t"), 19, ctypes.sizeof(Termios2Struct))
+    TCSETS2 = _ioc(_IOC_WRITE, ord("t"), 20, ctypes.sizeof(Termios2Struct))
+else:
+    TCGETS2 = _ioc(_IOC_READ, ord("T"), 0x2A, ctypes.sizeof(Termios2Struct))
+    TCSETS2 = _ioc(_IOC_WRITE, ord("T"), 0x2B, ctypes.sizeof(Termios2Struct))
 
 
 class LinuxSerial(ExtendedPosixSerial):
@@ -114,13 +139,17 @@ class LinuxSerial(ExtendedPosixSerial):
 
         termios2 = Termios2Struct.from_buffer(buffer)
 
-        # Sanity check that our struct layout matches the kernel's
-        if termios2.c_ispeed == 0 or termios2.c_ospeed == 0:
+        # A zero-filled readback means the ioctl/struct ABI is not the one we expect.
+        # PowerPC can report zero speed fields until BOTHER is written, so only the
+        # all-zero case is invalid there.
+        if not any(buffer) or (
+            not IS_POWERPC and (termios2.c_ispeed == 0 or termios2.c_ospeed == 0)
+        ):
             raise RuntimeError(f"termios2 speed fields are zero: {buffer.hex()}")
 
         # The POSIX baudrates are stored in the lower bits of `c_cflag`. We clear them.
         termios2.c_cflag &= ~CBAUD
-        termios2.c_cflag |= CBAUDEX
+        termios2.c_cflag |= BOTHER
 
         termios2.c_ispeed = baudrate
         termios2.c_ospeed = baudrate

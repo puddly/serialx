@@ -20,8 +20,8 @@ from unittest.mock import ANY, call, patch
 
 from serialx.common import PortSettingsUpdate
 from serialx.platforms.serial_linux import (
+    BOTHER,
     CBAUD,
-    CBAUDEX,
     TCGETS2,
     TCSETS2,
     LinuxSerial,
@@ -58,7 +58,7 @@ def test_set_non_posix_baudrate_handles_actual_hardware_rate() -> None:
     # the requested 115200.
     initial = Termios2Struct(
         c_cflag=(
-            termios.CS8 | termios.CREAD | termios.HUPCL | termios.CLOCAL | CBAUDEX
+            termios.CS8 | termios.CREAD | termios.HUPCL | termios.CLOCAL | BOTHER
         ),
         c_ispeed=115384,
         c_ospeed=115384,
@@ -78,8 +78,8 @@ def test_set_non_posix_baudrate_handles_actual_hardware_rate() -> None:
     written = Termios2Struct.from_buffer_copy(captured[0])
     assert written.c_ispeed == 250000
     assert written.c_ospeed == 250000
-    # CBAUDEX should be the only CBAUD bit set, signalling "use ispeed/ospeed"
-    assert written.c_cflag & CBAUD == CBAUDEX
+    # BOTHER should be the only CBAUD bit set, signalling "use ispeed/ospeed"
+    assert written.c_cflag & CBAUD == BOTHER
 
 
 def test_set_non_posix_baudrate_zero_speed_raises() -> None:
