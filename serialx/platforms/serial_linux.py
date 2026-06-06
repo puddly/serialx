@@ -31,7 +31,9 @@ ASYNC_LOW_LATENCY = 1 << 13
 CMSPAR = 0o10000000000
 TCGETS = 0x5401
 
-IS_POWERPC = os.uname().machine.startswith("ppc")
+_MACHINE = os.uname().machine
+IS_POWERPC = _MACHINE.startswith("ppc")
+IS_SPARC = _MACHINE.startswith("sparc")
 
 _IOC_NRBITS = 8
 _IOC_TYPEBITS = 8
@@ -39,7 +41,7 @@ _IOC_SIZEBITS = 14
 _IOC_WRITE = 1
 _IOC_READ = 2
 
-if IS_POWERPC:
+if IS_POWERPC or IS_SPARC:
     _IOC_SIZEBITS = 13
     _IOC_WRITE = 4
 
@@ -64,6 +66,10 @@ if IS_POWERPC:
     CBAUD = 0x000000FF
     CBAUDEX = 0x00000000
     BOTHER = 0x0000001F
+elif IS_SPARC:
+    CBAUD = 0x0000100F
+    CBAUDEX = 0x00001000
+    BOTHER = 0x00001000
 else:
     CBAUD = getattr(termios, "CBAUD", 0o00010017)
     CBAUDEX = getattr(termios, "CBAUDEX", 0o00010000)
@@ -112,6 +118,9 @@ class Termios2Struct(ctypes.Structure):
 if IS_POWERPC:
     TCGETS2 = _ioc(_IOC_READ, ord("t"), 19, ctypes.sizeof(Termios2Struct))
     TCSETS2 = _ioc(_IOC_WRITE, ord("t"), 20, ctypes.sizeof(Termios2Struct))
+elif IS_SPARC:
+    TCGETS2 = _ioc(_IOC_READ, ord("T"), 12, ctypes.sizeof(Termios2Struct))
+    TCSETS2 = _ioc(_IOC_WRITE, ord("T"), 13, ctypes.sizeof(Termios2Struct))
 else:
     TCGETS2 = _ioc(_IOC_READ, ord("T"), 0x2A, ctypes.sizeof(Termios2Struct))
     TCSETS2 = _ioc(_IOC_WRITE, ord("T"), 0x2B, ctypes.sizeof(Termios2Struct))

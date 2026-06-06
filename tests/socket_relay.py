@@ -12,12 +12,13 @@ import threading
 import time
 
 LOGGER = logging.getLogger(__name__)
+_RelayQueueItem = tuple[bytes | None, socket.socket | None]
 
 
 class _SocketPairRelay:
     def __init__(self) -> None:
-        self.left_to_right: queue.Queue[bytes] = queue.Queue()
-        self.right_to_left: queue.Queue[bytes] = queue.Queue()
+        self.left_to_right: queue.Queue[_RelayQueueItem] = queue.Queue()
+        self.right_to_left: queue.Queue[_RelayQueueItem] = queue.Queue()
         self.stop_event = threading.Event()
         self.active_connections: dict[str, socket.socket | None] = {
             "left": None,
@@ -71,10 +72,12 @@ class _SocketPairRelay:
         if previous is not conn:
             self._close_socket(previous)
 
-    def _clear_active_connection(self, side: str, conn: socket.socket) -> None:
+    def _clear_active_connection(self, side: str, conn: socket.socket) -> bool:
         with self.active_lock:
             if self.active_connections[side] is conn:
                 self.active_connections[side] = None
+                return True
+            return False
 
     def _get_active_connection(self, side: str) -> socket.socket | None:
         with self.active_lock:
@@ -84,7 +87,7 @@ class _SocketPairRelay:
         self,
         side: str,
         conn: socket.socket,
-        outbound_queue: queue.Queue[bytes],
+        outbound_queue: queue.Queue[_RelayQueueItem],
         peer_side: str,
     ) -> None:
         try:
@@ -100,7 +103,7 @@ class _SocketPairRelay:
                 if not data:
                     LOGGER.debug("%s client reached EOF", side)
                     return
-                outbound_queue.put(data)
+                outbound_queue.put((data, self._get_active_connection(peer_side)))
                 LOGGER.debug(
                     "queued %d bytes from %s to %s",
                     len(data),
@@ -110,7 +113,9 @@ class _SocketPairRelay:
         except OSError:
             LOGGER.debug("%s client disconnected abruptly", side, exc_info=True)
         finally:
-            self._clear_active_connection(side, conn)
+            was_active = self._clear_active_connection(side, conn)
+            if was_active:
+                outbound_queue.put((None, self._get_active_connection(peer_side)))
             self._close_socket(conn)
             LOGGER.debug("closed %s client connection", side)
 
@@ -118,7 +123,7 @@ class _SocketPairRelay:
         self,
         side: str,
         server_sock: socket.socket,
-        outbound_queue: queue.Queue[bytes],
+        outbound_queue: queue.Queue[_RelayQueueItem],
         peer_side: str,
     ) -> None:
         while not self.stop_event.is_set():
@@ -145,13 +150,21 @@ class _SocketPairRelay:
     def _writer_loop(
         self,
         side: str,
-        inbound_queue: queue.Queue[bytes],
+        inbound_queue: queue.Queue[_RelayQueueItem],
         peer_side: str,
     ) -> None:
         while not self.stop_event.is_set():
             try:
-                data = inbound_queue.get(timeout=0.1)
+                data, expected_conn = inbound_queue.get(timeout=0.1)
             except queue.Empty:
+                continue
+
+            if data is None:
+                if (
+                    expected_conn is not None
+                    and self._get_active_connection(side) is expected_conn
+                ):
+                    self.disconnect_side(side)
                 continue
 
             conn = self._get_active_connection(side)
@@ -159,6 +172,8 @@ class _SocketPairRelay:
                 time.sleep(0.001)
                 conn = self._get_active_connection(side)
             if conn is None:
+                continue
+            if expected_conn is not None and conn is not expected_conn:
                 continue
 
             try:
