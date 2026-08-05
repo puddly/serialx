@@ -15,9 +15,11 @@ from base64 import b64encode
 from collections.abc import AsyncIterator, Iterator
 import contextlib
 import threading
-from unittest.mock import patch
+from unittest.mock import ANY, AsyncMock, MagicMock, call, patch
 import urllib.parse
 import warnings
+
+from aioesphomeapi.model import DeviceInfo, SerialProxyMode, SerialProxyParity
 
 from serialx import (
     AsyncSerial,
@@ -32,6 +34,7 @@ from serialx.platforms.serial_esphome import (
     ESPHOME_DEFAULT_PORT,
     ESPHomeSerial,
     ESPHomeSerialTransport,
+    InvalidSettingsError,
 )
 
 from .common import ESPHOME_HOST_BINARY, create_esphome_pair, create_socat_pair
@@ -100,6 +103,44 @@ def base64(key: bytes) -> str:
     assert len(key) == 32
 
     return b64encode(key).decode("ascii")
+
+
+# Serial proxy calls whose ordering the transport is expected to guarantee
+PROXY_CALL_NAMES = (
+    "subscribe_serial_proxy_data",
+    "serial_proxy_configure",
+    "serial_proxy_set_mode",
+    "serial_proxy_subscribe",
+)
+
+
+def mock_api_client(*port_names: str) -> MagicMock:
+    """Create a mock `APIClient` recording the serial proxy calls made on it."""
+    device_info = DeviceInfo.from_dict(
+        {
+            "serial_proxies": [{"name": name} for name in port_names],
+            "mac_address": "98:35:69:AB:F6:79",
+            "manufacturer": "Host",
+            "model": "host",
+        }
+    )
+
+    api = MagicMock()
+    api.loop = asyncio.get_running_loop()
+    api.address = "127.0.0.1"
+    api.port = ESPHOME_DEFAULT_PORT
+    api.attach_mock(AsyncMock(), "connect")
+    api.attach_mock(AsyncMock(), "disconnect")
+    api.attach_mock(AsyncMock(return_value=device_info), "device_info")
+    api.attach_mock(AsyncMock(), "serial_proxy_set_mode")
+    api._get_connection.return_value.send_messages_await_response_complex = AsyncMock()
+
+    return api
+
+
+def proxy_calls(api: MagicMock) -> list[object]:
+    """Return only the ordering-relevant serial proxy calls made on `api`."""
+    return [c for c in api.mock_calls if c[0] in PROXY_CALL_NAMES]
 
 
 @pytest.mark.skipif(not ESPHOME_HOST_BINARY, reason="esphome host binary not available")
@@ -607,3 +648,99 @@ async def test_cross_loop_api_disconnect_breaks_transport() -> None:
                         await serial.read(1)
 
                     assert serial.transport.is_closing()
+
+async def test_mode_ezsp_ash_set_before_subscribe() -> None:
+    """`mode=ezsp_ash` sets the proxy mode after resolving, before subscribing."""
+    api = mock_api_client("Serial Proxy Left", "Zigbee")
+    url = "esphome://127.0.0.1:6053/?port_name=Zigbee&mode=ezsp_ash"
+
+    with patch("serialx.platforms.serial_esphome.APIClient", return_value=api):
+        async with async_serial_for_url(url=url, baudrate=115200):
+            pass
+
+    assert proxy_calls(api) == [
+        # The data handler is installed before anything can stream
+        call.subscribe_serial_proxy_data(ANY),
+        call.serial_proxy_configure(
+            instance=1,
+            baudrate=115200,
+            flow_control=False,
+            parity=SerialProxyParity.NONE,
+            stop_bits=1,
+            data_size=8,
+        ),
+        call.serial_proxy_set_mode(instance=1, mode=SerialProxyMode.EZSP_ASH),
+        call.serial_proxy_subscribe(1),
+    ]
+
+
+async def test_mode_ezsp_ash_kwarg_with_external_api() -> None:
+    """The `mode` kwarg is honored when the API client is passed in externally."""
+    api = mock_api_client("Zigbee")
+
+    async with async_serial_for_url(
+        url=None,
+        transport_cls=ESPHomeSerialTransport,
+        api=api,
+        port_name="Zigbee",
+        mode="ezsp_ash",
+        baudrate=115200,
+    ):
+        pass
+
+    assert proxy_calls(api) == [
+        call.subscribe_serial_proxy_data(ANY),
+        call.serial_proxy_configure(
+            instance=0,
+            baudrate=115200,
+            flow_control=False,
+            parity=SerialProxyParity.NONE,
+            stop_bits=1,
+            data_size=8,
+        ),
+        call.serial_proxy_set_mode(instance=0, mode=SerialProxyMode.EZSP_ASH),
+        call.serial_proxy_subscribe(0),
+    ]
+
+
+@pytest.mark.parametrize("query", ["", "&mode=raw"])
+async def test_mode_raw_does_not_set_mode(query: str) -> None:
+    """The default `raw` mode leaves the proxy mode untouched."""
+    api = mock_api_client("Zigbee")
+    url = f"esphome://127.0.0.1:6053/?port_name=Zigbee{query}"
+
+    with patch("serialx.platforms.serial_esphome.APIClient", return_value=api):
+        async with async_serial_for_url(url=url, baudrate=115200):
+            pass
+
+    assert proxy_calls(api) == [
+        call.subscribe_serial_proxy_data(ANY),
+        call.serial_proxy_configure(
+            instance=0,
+            baudrate=115200,
+            flow_control=False,
+            parity=SerialProxyParity.NONE,
+            stop_bits=1,
+            data_size=8,
+        ),
+        call.serial_proxy_subscribe(0),
+    ]
+
+
+async def test_invalid_mode_in_url() -> None:
+    """An unknown `mode` in the URL is rejected before any connection is made."""
+    api = mock_api_client("Zigbee")
+    url = "esphome://127.0.0.1:6053/?port_name=Zigbee&mode=ezsp"
+
+    with patch("serialx.platforms.serial_esphome.APIClient", return_value=api):
+        with pytest.raises(InvalidSettingsError, match="Invalid serial proxy mode"):
+            async with async_serial_for_url(url=url, baudrate=115200):
+                pass
+
+    assert len(api.mock_calls) == 0
+
+
+def test_invalid_mode_kwarg() -> None:
+    """An unknown `mode` kwarg is rejected immediately."""
+    with pytest.raises(InvalidSettingsError, match="Invalid serial proxy mode"):
+        ESPHomeSerial(port_name="Zigbee", mode="zigbee", baudrate=115200)

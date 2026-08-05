@@ -31,9 +31,6 @@ with suppress(ImportError):
     from . import serial_esphome  # noqa: F401
 
 with suppress(ImportError):
-    from . import serial_esphome_zigbee  # noqa: F401
-
-with suppress(ImportError):
     from . import serial_pyodide  # noqa: F401
 
 if TYPE_CHECKING:

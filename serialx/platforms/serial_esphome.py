@@ -25,7 +25,7 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Callable, Coroutine
 from contextlib import suppress
-from enum import IntFlag
+from enum import Enum, IntFlag
 import errno
 import functools
 import logging
@@ -45,6 +45,7 @@ from aioesphomeapi.model import (
     ConnectionClosedEvent,
     DisconnectReason,
     SerialProxyDataReceived,
+    SerialProxyMode,
     SerialProxyParity,
     SerialProxyRequestResponse,
     SerialProxyStatus,
@@ -108,6 +109,24 @@ class InvalidSettingsError(SerialException):
     """Raised when the provided settings are invalid."""
 
 
+class SerialProxyModeName(str, Enum):
+    """Framing mode requested from the ESPHome serial proxy."""
+
+    RAW = "raw"
+    EZSP_ASH = "ezsp_ash"
+
+
+def parse_serial_proxy_mode(value: SerialProxyModeName | str) -> SerialProxyModeName:
+    """Parse a serial proxy mode name, rejecting unknown values."""
+    try:
+        return SerialProxyModeName(value)
+    except ValueError:
+        valid = ", ".join(mode.value for mode in SerialProxyModeName)
+        raise InvalidSettingsError(
+            f"Invalid serial proxy mode {value!r}, expected one of: {valid}"
+        ) from None
+
+
 def translate_esphome_errors(
     func: Callable[_P, Coroutine[Any, Any, _T]],
 ) -> Callable[_P, Coroutine[Any, Any, _T]]:
@@ -164,6 +183,7 @@ class ESPHomeSerial(BaseSerial):
         api: APIClient | None = None,
         port_name: str | None = None,
         port_instance: int | None = None,
+        mode: SerialProxyModeName | str = SerialProxyModeName.RAW,
         key: str | None = None,
         password: str | None = None,
         noise_psk: str | None = None,
@@ -186,6 +206,8 @@ class ESPHomeSerial(BaseSerial):
                 instance to connect to.
 
                 .. deprecated:: 1.2.0
+            mode: The framing mode the serial proxy should use, either `raw` (the
+                default) or `ezsp_ash` for an EmberZNet NCP speaking ASH.
             key: The Noise PSK to use when creating an `aioesphomeapi.APIClient`
                 instance.
             password: The API password to use when creating an `aioesphomeapi.APIClient`
@@ -212,6 +234,7 @@ class ESPHomeSerial(BaseSerial):
         )
         self._port_name: str | None = port_name
         self._instance_id: int | None = port_instance
+        self._mode: SerialProxyModeName = parse_serial_proxy_mode(mode)
         self._password: str | None = password
         self._noise_psk: str | None = key or noise_psk
         self._disconnect_api: bool = False
@@ -373,6 +396,9 @@ class ESPHomeSerial(BaseSerial):
             elif not self._port_name:
                 self._port_name = port_value
 
+            if "mode" in params:
+                self._mode = parse_serial_proxy_mode(params["mode"][0])
+
             if "password" in params:
                 self._password = params["password"][0]
 
@@ -512,6 +538,25 @@ class ESPHomeSerial(BaseSerial):
 
         await self._resolve_instance_id()
         assert self._instance_id is not None
+
+        # The mode must be set before the device starts streaming: an EZSP/ASH NCP frames
+        # its traffic and the first bytes cannot be reinterpreted after the fact. The data
+        # handler is already installed at this point, so nothing that arrives in the gap
+        # between the mode change and the subscribe is dropped.
+        #
+        # Always sent, including for `raw`. The device may have been configured to start in
+        # ezsp_ash mode, and a client that wants raw bytes -- a firmware flasher, above all
+        # -- has to be able to turn the proxy's protocol handling off. Skipping the call for
+        # `raw` would leave it stuck on, injecting ASH acknowledgements into an upload.
+        self._schedule_on_client_loop(
+            self._api.serial_proxy_set_mode,
+            instance=self._instance_id,
+            mode=(
+                SerialProxyMode.EZSP_ASH
+                if self._mode is SerialProxyModeName.EZSP_ASH
+                else SerialProxyMode.RAW
+            ),
+        )
 
         await self._call_on_client_loop_validated(
             self._api.serial_proxy_subscribe_await_response(self._instance_id)
@@ -767,7 +812,9 @@ class ESPHomeSerialTransport(BaseSerialTransport):
         await self._serial._async_open()
 
         assert self._serial._api is not None
-        await self._serial._async_configure_port()
+        # Install the data handler *before* subscribing. The device starts streaming as
+        # soon as the subscribe lands, so anything it sends in the gap -- a bootloader
+        # banner, a chatty sensor's first reading -- is silently dropped.
         self._unsub = await self._serial._call_on_client_loop(
             self._register_transport_data_handler()
         )
@@ -779,6 +826,8 @@ class ESPHomeSerialTransport(BaseSerialTransport):
         # up, so the state has to be re-checked once the callback is installed.
         if not self._serial._api.is_connected:
             raise SerialException("ESPHome API connection closed while connecting")
+
+        await self._serial._async_configure_port()
 
         self._call_protocol_connection_made()
 
