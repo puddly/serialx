@@ -115,6 +115,16 @@ class SerialProxyModeName(str, Enum):
 
     RAW = "raw"
     EZSP_ASH = "ezsp_ash"
+    ZWAVE = "zwave"
+
+
+# The device's own spelling of the modes, both ways
+MODE_MAP = {
+    SerialProxyModeName.RAW: SerialProxyMode.RAW,
+    SerialProxyModeName.EZSP_ASH: SerialProxyMode.EZSP_ASH,
+    SerialProxyModeName.ZWAVE: SerialProxyMode.ZWAVE,
+}
+MODE_NAMES = {mode: name for name, mode in MODE_MAP.items()}
 
 
 def parse_serial_proxy_mode(value: SerialProxyModeName | str) -> SerialProxyModeName:
@@ -379,7 +389,7 @@ class ESPHomeSerial(BaseSerial):
         self._call_on_loop(self._async_register_data_handler())
 
     @property
-    def tap_mode(self) -> SerialProxyMode | None:
+    def tap_mode(self) -> SerialProxyModeName | None:
         """The framing mode a tap on this port can handle on the client's behalf.
 
         `None` until the port has been resolved. `SerialProxyMode.RAW` means the port has no
@@ -387,7 +397,7 @@ class ESPHomeSerial(BaseSerial):
         """
         if self._port_info is None:
             return None
-        return self._port_info.tap_mode
+        return MODE_NAMES[self._port_info.tap_mode]
 
     @property
     def is_open(self) -> bool:
@@ -576,11 +586,7 @@ class ESPHomeSerial(BaseSerial):
         self._schedule_on_client_loop(
             self._api.serial_proxy_set_mode,
             instance=self._instance_id,
-            mode=(
-                SerialProxyMode.EZSP_ASH
-                if self._mode is SerialProxyModeName.EZSP_ASH
-                else SerialProxyMode.RAW
-            ),
+            mode=MODE_MAP[self._mode],
         )
 
         # Awaited, not scheduled: the device answers a claim, and a refusal has to become an
