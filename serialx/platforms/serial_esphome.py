@@ -45,6 +45,7 @@ from aioesphomeapi.model import (
     ConnectionClosedEvent,
     DisconnectReason,
     SerialProxyDataReceived,
+    SerialProxyInfo,
     SerialProxyMode,
     SerialProxyParity,
     SerialProxyRequestResponse,
@@ -240,6 +241,8 @@ class ESPHomeSerial(BaseSerial):
         self._port_name: str | None = port_name
         # When set, the port must have this exact USB device attached or the claim is refused
         self._usb_serial_number: str | None = usb_serial_number
+        # What the device says about the resolved port, known once it has been resolved
+        self._port_info: SerialProxyInfo | None = None
         self._instance_id: int | None = port_instance
         self._mode: SerialProxyModeName = parse_serial_proxy_mode(mode)
         self._password: str | None = password
@@ -374,6 +377,17 @@ class ESPHomeSerial(BaseSerial):
         self._read_event = asyncio.Event()
         self._call_on_loop(self._async_open())
         self._call_on_loop(self._async_register_data_handler())
+
+    @property
+    def tap_mode(self) -> SerialProxyMode | None:
+        """The framing mode a tap on this port can handle on the client's behalf.
+
+        `None` until the port has been resolved. `SerialProxyMode.RAW` means the port has no
+        tap, so a client must do that protocol's work itself.
+        """
+        if self._port_info is None:
+            return None
+        return self._port_info.tap_mode
 
     @property
     def is_open(self) -> bool:
@@ -538,8 +552,9 @@ class ESPHomeSerial(BaseSerial):
                 f" does not exist in {name_to_info_mapping!r}"
             )
 
-        instance_id, _proxy_info = name_to_info_mapping[self._port_name]
+        instance_id, proxy_info = name_to_info_mapping[self._port_name]
         self._instance_id = instance_id
+        self._port_info = proxy_info
 
     async def _subscribe_instance(self) -> None:
         """Subscribe serial proxy streaming for this instance if supported."""
