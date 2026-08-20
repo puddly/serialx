@@ -182,6 +182,7 @@ class ESPHomeSerial(BaseSerial):
         loop: asyncio.AbstractEventLoop | None = None,
         api: APIClient | None = None,
         port_name: str | None = None,
+        usb_serial_number: str | None = None,
         port_instance: int | None = None,
         mode: SerialProxyModeName | str = SerialProxyModeName.RAW,
         key: str | None = None,
@@ -202,6 +203,10 @@ class ESPHomeSerial(BaseSerial):
                 be skipped and the API will not be disconnected once the serial object
                 is closed.
             port_name: The `name` attribute of the ESPHome serial proxy to connect to.
+            usb_serial_number: Serial number of the USB device that must be attached to
+                the port. A port is a socket, so without this the connection succeeds
+                against whatever happens to be plugged in. Also read from a
+                ``usb_serial`` query parameter.
             port_instance: The numerical instance ID of the ESPHome serial proxy
                 instance to connect to.
 
@@ -233,6 +238,8 @@ class ESPHomeSerial(BaseSerial):
             api.loop if api is not None else None
         )
         self._port_name: str | None = port_name
+        # When set, the port must have this exact USB device attached or the claim is refused
+        self._usb_serial_number: str | None = usb_serial_number
         self._instance_id: int | None = port_instance
         self._mode: SerialProxyModeName = parse_serial_proxy_mode(mode)
         self._password: str | None = password
@@ -396,6 +403,9 @@ class ESPHomeSerial(BaseSerial):
             elif not self._port_name:
                 self._port_name = port_value
 
+            if "usb_serial" in params:
+                self._usb_serial_number = params["usb_serial"][0]
+
             if "mode" in params:
                 self._mode = parse_serial_proxy_mode(params["mode"][0])
 
@@ -558,10 +568,18 @@ class ESPHomeSerial(BaseSerial):
             ),
         )
 
+        # Awaited, not scheduled: the device answers a claim, and a refusal has to become an
+        # exception here. Fire-and-forget would leave a rejected client waiting on a port it
+        # never got, which looks exactly like a device with nothing to say.
         await self._call_on_client_loop_validated(
-            self._api.serial_proxy_subscribe_await_response(self._instance_id)
+            self._api.serial_proxy_subscribe_await_response(
+                self._instance_id,
+                timeout=self._connect_timeout,
+                usb_serial_number=self._usb_serial_number or "",
+            )
         )
-
+        # The mode change was scheduled ahead of the subscribe on the same loop and the
+        # device handles messages in receive order, so an answer proves it landed first.
         self._instance_subscribed = True
 
     def _unsubscribe_instance(self) -> None:
