@@ -164,7 +164,7 @@ class _SocketPairRelay:
                     expected_conn is not None
                     and self._get_active_connection(side) is expected_conn
                 ):
-                    self.disconnect_side(side)
+                    self.disconnect_side(side, abrupt=False)
                 continue
 
             conn = self._get_active_connection(side)
