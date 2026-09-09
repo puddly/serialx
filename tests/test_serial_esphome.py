@@ -3,7 +3,7 @@
 import pytest
 
 try:
-    from aioesphomeapi.client import APIClient
+    from aioesphomeapi.client import MIN_VERSION_PROXY_ACK, APIClient
 except ImportError:
     pytest.skip(
         "aioesphomeapi is required to run esphome transport tests",
@@ -114,9 +114,9 @@ def base64(key: bytes) -> str:
 # Serial proxy calls whose ordering the transport is expected to guarantee
 PROXY_CALL_NAMES = (
     "subscribe_serial_proxy_data",
-    "serial_proxy_configure",
+    "serial_proxy_configure_await_response",
     "serial_proxy_set_mode",
-    "serial_proxy_subscribe",
+    "serial_proxy_subscribe_await_response",
 )
 
 
@@ -138,7 +138,14 @@ def mock_api_client(*port_names: str) -> MagicMock:
     api.attach_mock(AsyncMock(), "connect")
     api.attach_mock(AsyncMock(), "disconnect")
     api.attach_mock(AsyncMock(return_value=device_info), "device_info")
-    api.attach_mock(AsyncMock(), "serial_proxy_set_mode")
+    api.attach_mock(
+        AsyncMock(return_value=None), "serial_proxy_configure_await_response"
+    )
+    api.attach_mock(
+        AsyncMock(return_value=None), "serial_proxy_subscribe_await_response"
+    )
+    # Recent enough that the validated helper does not fall back to a flushing ping
+    api.api_version = MIN_VERSION_PROXY_ACK
     api._get_connection.return_value.send_messages_await_response_complex = AsyncMock()
 
     return api
@@ -668,7 +675,7 @@ async def test_mode_protocol_set_before_subscribe() -> None:
     assert proxy_calls(api) == [
         # The data handler is installed before anything can stream
         call.subscribe_serial_proxy_data(ANY),
-        call.serial_proxy_configure(
+        call.serial_proxy_configure_await_response(
             instance=1,
             baudrate=115200,
             flow_control=False,
@@ -677,7 +684,7 @@ async def test_mode_protocol_set_before_subscribe() -> None:
             data_size=8,
         ),
         call.serial_proxy_set_mode(instance=1, mode=SerialProxyMode.PROTOCOL),
-        call.serial_proxy_subscribe(1),
+        call.serial_proxy_subscribe_await_response(1, timeout=ANY),
     ]
 
 
@@ -697,7 +704,7 @@ async def test_mode_protocol_kwarg_with_external_api() -> None:
 
     assert proxy_calls(api) == [
         call.subscribe_serial_proxy_data(ANY),
-        call.serial_proxy_configure(
+        call.serial_proxy_configure_await_response(
             instance=0,
             baudrate=115200,
             flow_control=False,
@@ -706,13 +713,13 @@ async def test_mode_protocol_kwarg_with_external_api() -> None:
             data_size=8,
         ),
         call.serial_proxy_set_mode(instance=0, mode=SerialProxyMode.PROTOCOL),
-        call.serial_proxy_subscribe(0),
+        call.serial_proxy_subscribe_await_response(0, timeout=ANY),
     ]
 
 
 @pytest.mark.parametrize("query", ["", "&mode=raw"])
-async def test_mode_raw_does_not_set_mode(query: str) -> None:
-    """The default `raw` mode leaves the proxy mode untouched."""
+async def test_mode_raw_is_sent_explicitly(query: str) -> None:
+    """`raw` is sent too, so a client can turn a tap off that was left on."""
     api = mock_api_client("Zigbee")
     url = f"esphome://127.0.0.1:6053/?port_name=Zigbee{query}"
 
@@ -722,7 +729,7 @@ async def test_mode_raw_does_not_set_mode(query: str) -> None:
 
     assert proxy_calls(api) == [
         call.subscribe_serial_proxy_data(ANY),
-        call.serial_proxy_configure(
+        call.serial_proxy_configure_await_response(
             instance=0,
             baudrate=115200,
             flow_control=False,
@@ -730,7 +737,8 @@ async def test_mode_raw_does_not_set_mode(query: str) -> None:
             stop_bits=1,
             data_size=8,
         ),
-        call.serial_proxy_subscribe(0),
+        call.serial_proxy_set_mode(instance=0, mode=SerialProxyMode.RAW),
+        call.serial_proxy_subscribe_await_response(0, timeout=ANY),
     ]
 
 
