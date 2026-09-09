@@ -38,16 +38,16 @@ if __name__ == "__main__":
 Use `password=` instead of `noise_psk=` in the query string if the device uses legacy API password authentication. If the device does not use any authentication, you can omit this keyword argument.
 
 ## Proxy modes
-A serial proxy streams an opaque byte stream by default. Devices proxying an EmberZNet NCP can instead be switched into ASH framing mode with `mode=ezsp_ash`, which is still presented locally as a plain serial port:
+A serial proxy streams an opaque byte stream by default. A port configured with a protocol-aware tap can instead be switched into `mode=protocol`, letting the device handle that protocol's timing-sensitive work on your behalf. It is still presented locally as a plain serial port:
 
 ```python
 reader, writer = await serialx.open_serial_connection(
-    url="esphome://192.168.1.42:6053/?port_name=Zigbee&mode=ezsp_ash",
+    url="esphome://192.168.1.42:6053/?port_name=Zigbee&mode=protocol",
     baudrate=115200,
 )
 ```
 
-The mode is applied before the proxy starts streaming. Only `raw` (the default) and `ezsp_ash` are accepted; any other value is rejected.
+The mode is applied before the proxy starts streaming. Only `raw` (the default) and `protocol` are accepted; any other value is rejected. Which protocol `protocol` engages depends on the tap the device's configuration gives that port.
 
 ## Reusing an existing API client
 If your application already holds an `aioesphomeapi.APIClient`, pass it to the transport directly to avoid opening a second connection:

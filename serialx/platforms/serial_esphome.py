@@ -111,18 +111,16 @@ class InvalidSettingsError(SerialException):
 
 
 class SerialProxyModeName(str, Enum):
-    """Framing mode requested from the ESPHome serial proxy."""
+    """Mode requested from the ESPHome serial proxy."""
 
     RAW = "raw"
-    EZSP_ASH = "ezsp_ash"
-    ZWAVE = "zwave"
+    PROTOCOL = "protocol"
 
 
 # The device's own spelling of the modes, both ways
 MODE_MAP = {
     SerialProxyModeName.RAW: SerialProxyMode.RAW,
-    SerialProxyModeName.EZSP_ASH: SerialProxyMode.EZSP_ASH,
-    SerialProxyModeName.ZWAVE: SerialProxyMode.ZWAVE,
+    SerialProxyModeName.PROTOCOL: SerialProxyMode.PROTOCOL,
 }
 MODE_NAMES = {mode: name for name, mode in MODE_MAP.items()}
 
@@ -222,8 +220,8 @@ class ESPHomeSerial(BaseSerial):
                 instance to connect to.
 
                 .. deprecated:: 1.2.0
-            mode: The framing mode the serial proxy should use, either `raw` (the
-                default) or `ezsp_ash` for an EmberZNet NCP speaking ASH.
+            mode: The mode the serial proxy should use, either `raw` (the default)
+                or `protocol` to engage the port's protocol-aware tap.
             key: The Noise PSK to use when creating an `aioesphomeapi.APIClient`
                 instance.
             password: The API password to use when creating an `aioesphomeapi.APIClient`
@@ -390,10 +388,10 @@ class ESPHomeSerial(BaseSerial):
 
     @property
     def tap_mode(self) -> SerialProxyModeName | None:
-        """The framing mode a tap on this port can handle on the client's behalf.
+        """The mode a tap on this port can handle on the client's behalf.
 
-        `None` until the port has been resolved. `SerialProxyMode.RAW` means the port has no
-        tap, so a client must do that protocol's work itself.
+        `None` until the port has been resolved. `raw` means the port has no tap, so a
+        client must do the protocol's work itself.
         """
         if self._port_info is None:
             return None
@@ -574,15 +572,12 @@ class ESPHomeSerial(BaseSerial):
         await self._resolve_instance_id()
         assert self._instance_id is not None
 
-        # The mode must be set before the device starts streaming: an EZSP/ASH NCP frames
-        # its traffic and the first bytes cannot be reinterpreted after the fact. The data
-        # handler is already installed at this point, so nothing that arrives in the gap
-        # between the mode change and the subscribe is dropped.
+        # Set before the device starts streaming: a framed protocol cannot have its first
+        # bytes reinterpreted after the fact. The data handler is already installed, so
+        # nothing arriving between the mode change and the subscribe is dropped.
         #
-        # Always sent, including for `raw`. The device may have been configured to start in
-        # ezsp_ash mode, and a client that wants raw bytes -- a firmware flasher, above all
-        # -- has to be able to turn the proxy's protocol handling off. Skipping the call for
-        # `raw` would leave it stuck on, injecting ASH acknowledgements into an upload.
+        # Always sent, including for `raw`: a client that wants raw bytes -- a firmware
+        # flasher above all -- has to be able to turn the tap's injection off.
         self._schedule_on_client_loop(
             self._api.serial_proxy_set_mode,
             instance=self._instance_id,

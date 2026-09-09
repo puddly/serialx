@@ -649,10 +649,11 @@ async def test_cross_loop_api_disconnect_breaks_transport() -> None:
 
                     assert serial.transport.is_closing()
 
-async def test_mode_ezsp_ash_set_before_subscribe() -> None:
-    """`mode=ezsp_ash` sets the proxy mode after resolving, before subscribing."""
+
+async def test_mode_protocol_set_before_subscribe() -> None:
+    """`mode=protocol` sets the proxy mode after resolving, before subscribing."""
     api = mock_api_client("Serial Proxy Left", "Zigbee")
-    url = "esphome://127.0.0.1:6053/?port_name=Zigbee&mode=ezsp_ash"
+    url = "esphome://127.0.0.1:6053/?port_name=Zigbee&mode=protocol"
 
     with patch("serialx.platforms.serial_esphome.APIClient", return_value=api):
         async with async_serial_for_url(url=url, baudrate=115200):
@@ -669,12 +670,12 @@ async def test_mode_ezsp_ash_set_before_subscribe() -> None:
             stop_bits=1,
             data_size=8,
         ),
-        call.serial_proxy_set_mode(instance=1, mode=SerialProxyMode.EZSP_ASH),
+        call.serial_proxy_set_mode(instance=1, mode=SerialProxyMode.PROTOCOL),
         call.serial_proxy_subscribe(1),
     ]
 
 
-async def test_mode_ezsp_ash_kwarg_with_external_api() -> None:
+async def test_mode_protocol_kwarg_with_external_api() -> None:
     """The `mode` kwarg is honored when the API client is passed in externally."""
     api = mock_api_client("Zigbee")
 
@@ -683,7 +684,7 @@ async def test_mode_ezsp_ash_kwarg_with_external_api() -> None:
         transport_cls=ESPHomeSerialTransport,
         api=api,
         port_name="Zigbee",
-        mode="ezsp_ash",
+        mode="protocol",
         baudrate=115200,
     ):
         pass
@@ -698,7 +699,7 @@ async def test_mode_ezsp_ash_kwarg_with_external_api() -> None:
             stop_bits=1,
             data_size=8,
         ),
-        call.serial_proxy_set_mode(instance=0, mode=SerialProxyMode.EZSP_ASH),
+        call.serial_proxy_set_mode(instance=0, mode=SerialProxyMode.PROTOCOL),
         call.serial_proxy_subscribe(0),
     ]
 
