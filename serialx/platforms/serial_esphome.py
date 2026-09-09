@@ -191,9 +191,9 @@ class ESPHomeSerial(BaseSerial):
         loop: asyncio.AbstractEventLoop | None = None,
         api: APIClient | None = None,
         port_name: str | None = None,
-        usb_serial_number: str | None = None,
         port_instance: int | None = None,
         mode: SerialProxyModeName | str = SerialProxyModeName.RAW,
+        usb_serial_number: str | None = None,
         key: str | None = None,
         password: str | None = None,
         noise_psk: str | None = None,
@@ -212,8 +212,8 @@ class ESPHomeSerial(BaseSerial):
                 be skipped and the API will not be disconnected once the serial object
                 is closed.
             port_name: The `name` attribute of the ESPHome serial proxy to connect to.
-            usb_serial_number: Serial number of the USB device that must be attached to
-                the port. A port is a socket, so without this the connection succeeds
+            usb_serial_number: Serial number the USB device behind the port must
+                report. A port is a socket, so without this the connection succeeds
                 against whatever happens to be plugged in. Also read from a
                 ``usb_serial`` query parameter.
             port_instance: The numerical instance ID of the ESPHome serial proxy
@@ -248,11 +248,12 @@ class ESPHomeSerial(BaseSerial):
         )
         self._port_name: str | None = port_name
         # When set, the port must have this exact USB device attached or the claim is refused
-        self._usb_serial_number: str | None = usb_serial_number
         # What the device says about the resolved port, known once it has been resolved
         self._port_info: SerialProxyInfo | None = None
         self._instance_id: int | None = port_instance
         self._mode: SerialProxyModeName = parse_serial_proxy_mode(mode)
+        self._usb_serial_number: str | None = usb_serial_number
+        self._usb_serial_checked: bool = False
         self._password: str | None = password
         self._noise_psk: str | None = key or noise_psk
         self._disconnect_api: bool = False
@@ -543,9 +544,20 @@ class ESPHomeSerial(BaseSerial):
 
     async def _resolve_instance_id(self) -> None:
         """Resolve `_instance_id` from `_port_name` against the device."""
-        if self._api is None or self._instance_id is not None:
+        if self._api is None:
             return
 
+        if self._instance_id is None:
+            await self._resolve_instance_id_from_name()
+
+        # Also reached when `port_instance` skipped the lookup above
+        if self._usb_serial_number is not None and not self._usb_serial_checked:
+            self._usb_serial_checked = True
+            await self._check_usb_serial_number()
+
+    async def _resolve_instance_id_from_name(self) -> None:
+        """Look `_instance_id` up by `_port_name`."""
+        assert self._api is not None
         assert self._port_name is not None
         info = await self._call_on_client_loop(self._api.device_info())
 
@@ -563,6 +575,32 @@ class ESPHomeSerial(BaseSerial):
         instance_id, proxy_info = name_to_info_mapping[self._port_name]
         self._instance_id = instance_id
         self._port_info = proxy_info
+
+    async def _check_usb_serial_number(self) -> None:
+        """Fail unless the device behind the port reports the expected serial number."""
+        assert self._api is not None
+        assert self._instance_id is not None
+
+        usb_info = await self._call_on_client_loop(
+            self._api.serial_proxy_get_usb_info(self._instance_id)
+        )
+
+        if usb_info.status is not None:
+            error_factory = STATUS_TO_ERROR_MAP.get(usb_info.status)
+            if error_factory is not None:
+                raise error_factory("cannot read the port's USB identity")
+
+        if not usb_info.connected:
+            raise SerialException(
+                f"No USB device is attached to serial proxy {self._port_name!r}"
+            )
+
+        if usb_info.serial_number != self._usb_serial_number:
+            raise SerialException(
+                f"Serial proxy {self._port_name!r} has USB device"
+                f" {usb_info.serial_number!r} attached, expected"
+                f" {self._usb_serial_number!r}"
+            )
 
     async def _subscribe_instance(self) -> None:
         """Subscribe serial proxy streaming for this instance if supported."""
@@ -591,7 +629,6 @@ class ESPHomeSerial(BaseSerial):
             self._api.serial_proxy_subscribe_await_response(
                 self._instance_id,
                 timeout=self._connect_timeout,
-                usb_serial_number=self._usb_serial_number or "",
             )
         )
         # The mode change was scheduled ahead of the subscribe on the same loop and the
