@@ -50,6 +50,7 @@ from aioesphomeapi.model import (
     SerialProxyParity,
     SerialProxyRequestResponse,
     SerialProxyStatus,
+    SerialProxyUsbInfo,
 )
 from typing_extensions import Buffer, Unpack
 
@@ -262,6 +263,7 @@ class ESPHomeSerial(BaseSerial):
         self._read_event = asyncio.Event()
         self._unsub: Callable[[], None] | None = None
         self._closed_unsub: Callable[[], None] | None = None
+        self._usb_unsub: Callable[[], None] | None = None
         self._instance_subscribed = False
 
         self._last_line_states = LineStateFlag(0)
@@ -380,6 +382,52 @@ class ESPHomeSerial(BaseSerial):
 
         self._unsubscribe_connection_closed()
 
+    def _usb_device_lost_error(self, info: SerialProxyUsbInfo) -> OSError | None:
+        """Return the error a USB identity message means for this port, if any."""
+        if self._instance_id is None or info.instance != self._instance_id:
+            return None
+
+        if info.status is not SerialProxyStatus.OK:
+            return None
+
+        if not info.connected:
+            return OSError(
+                errno.ENXIO, f"USB device removed from serial proxy {self._port_name!r}"
+            )
+
+        if (
+            self._usb_serial_number is not None
+            and info.serial_number != self._usb_serial_number
+        ):
+            return OSError(
+                errno.ENXIO,
+                f"Serial proxy {self._port_name!r} now has USB device"
+                f" {info.serial_number!r} attached, expected {self._usb_serial_number!r}",
+            )
+
+        return None
+
+    def _on_usb_info(self, info: SerialProxyUsbInfo) -> None:
+        """Handle a USB identity message, called on the client's loop."""
+        client_loop = self._client_loop
+        if client_loop is None or client_loop is self._loop:
+            self._handle_usb_info(info)
+        else:
+            assert self._loop is not None
+            self._loop.call_soon_threadsafe(self._handle_usb_info, info)
+
+    def _handle_usb_info(self, info: SerialProxyUsbInfo) -> None:
+        """Break the port when the USB device behind it went away."""
+        exc = self._usb_device_lost_error(info)
+        if exc is None:
+            return
+
+        # The port's subscription and the API connection are both still alive; only the
+        # device is gone. Like a pulled cable, that is the end of this session, and a new
+        # one has to be opened once something is plugged back in.
+        self._mark_broken(exc)
+        self._read_event.set()
+
     def _open(self) -> None:
         """Open the serial port."""
         self._maybe_start_new_event_loop()
@@ -464,10 +512,22 @@ class ESPHomeSerial(BaseSerial):
                 self._register_closed_handler()
             )
 
+        # Before the port is resolved and its USB identity checked, so a device pulled in
+        # between is not missed
+        if self._usb_unsub is None:
+            self._usb_unsub = await self._call_on_client_loop(
+                self._register_usb_info_handler()
+            )
+
     async def _register_closed_handler(self) -> Callable[[], None]:
         """Register `_on_connection_closed` on the client's loop and return the unsub."""
         assert self._api is not None
         return self._api.add_connection_closed_callback(self._on_connection_closed)
+
+    async def _register_usb_info_handler(self) -> Callable[[], None]:
+        """Register `_on_usb_info` on the client's loop and return the unsub."""
+        assert self._api is not None
+        return self._api.subscribe_serial_proxy_usb_info(self._on_usb_info)
 
     @translate_esphome_errors
     async def _async_list_serial_ports(self) -> list[SerialPortInfo]:
@@ -829,6 +889,10 @@ class ESPHomeSerial(BaseSerial):
             self._schedule_on_client_loop(self._unsub)
             self._unsub = None
 
+        if self._usb_unsub is not None:
+            self._schedule_on_client_loop(self._usb_unsub)
+            self._usb_unsub = None
+
         self._unsubscribe_connection_closed()
 
     async def _async_close(self) -> None:
@@ -872,6 +936,7 @@ class ESPHomeSerialTransport(BaseSerialTransport):
         super().__init__(loop, protocol)
         self._unsub: Callable[[], None] | None = None
         self._closed_unsub: Callable[[], None] | None = None
+        self._usb_unsub: Callable[[], None] | None = None
         self._close_task: asyncio.Task[None] | None = None
 
     @translate_esphome_errors
@@ -893,6 +958,9 @@ class ESPHomeSerialTransport(BaseSerialTransport):
         )
         self._closed_unsub = await self._serial._call_on_client_loop(
             self._register_transport_closed_handler()
+        )
+        self._usb_unsub = await self._serial._call_on_client_loop(
+            self._register_transport_usb_info_handler()
         )
 
         # Nothing is replayed for a connection that closed while we were setting
@@ -942,6 +1010,39 @@ class ESPHomeSerialTransport(BaseSerialTransport):
             self._schedule_unsub(self._closed_unsub)
             self._closed_unsub = None
 
+    async def _register_transport_usb_info_handler(self) -> Callable[[], None]:
+        """Register `_on_api_usb_info` on the client's loop, return the unsub."""
+        assert self._serial is not None
+        assert self._serial._api is not None
+
+        # This isn't a coroutine but needs to be run in the target loop
+        unsub: Callable[[], None] = self._serial._api.subscribe_serial_proxy_usb_info(
+            self._on_api_usb_info
+        )
+        return unsub
+
+    def _on_api_usb_info(self, info: SerialProxyUsbInfo) -> None:
+        """Handle a USB identity message, called on the client's loop."""
+        assert self._serial is not None
+
+        exc = self._serial._usb_device_lost_error(info)
+        if exc is None:
+            return
+
+        client_loop = self._serial._client_loop
+        if client_loop is None or client_loop is self._loop:
+            self._usb_device_lost(exc)
+        else:
+            self._loop.call_soon_threadsafe(self._usb_device_lost, exc)
+
+    def _usb_device_lost(self, exc: OSError) -> None:
+        """Tear down the transport after the USB device behind the port went away."""
+        if self._connection_lost_called or self._closing:
+            return
+
+        self._mark_broken(exc)
+        self._close_with(exc)
+
     def _schedule_unsub(self, unsub: Callable[[], None]) -> None:
         """Run an unsub on the client's loop, or inline if the serial is gone."""
         serial = self._serial
@@ -990,21 +1091,29 @@ class ESPHomeSerialTransport(BaseSerialTransport):
         """Close the transport."""
         if self._closing:
             return
-        self._closing = True
         self._mark_user_closed()
         self._arm_close_timeout()
+        self._close_with(None)
+
+    def _close_with(self, exc: OSError | None) -> None:
+        """Release everything and tell the protocol why, or None for a clean close."""
+        self._closing = True
 
         serial = self._serial
         if self._unsub is not None:
             self._schedule_unsub(self._unsub)
             self._unsub = None
 
+        if self._usb_unsub is not None:
+            self._schedule_unsub(self._usb_unsub)
+            self._usb_unsub = None
+
         if self._closed_unsub is not None:
             self._schedule_unsub(self._closed_unsub)
             self._closed_unsub = None
 
         if serial is None:
-            self._call_protocol_connection_lost(None)
+            self._call_protocol_connection_lost(exc)
             return
 
         serial._unsubscribe_instance()
@@ -1012,31 +1121,31 @@ class ESPHomeSerialTransport(BaseSerialTransport):
 
         if not serial._disconnect_api:
             # Transport does not own the external API lifecycle.
-            self._call_protocol_connection_lost(None)
+            self._call_protocol_connection_lost(exc)
             return
 
         api = serial._api
         serial._api = None
         if api is None:
-            self._call_protocol_connection_lost(None)
+            self._call_protocol_connection_lost(exc)
             return
 
         # TODO: clean shutdown without `wait_closed()` needs a public sync
         # force-disconnect on APIClient (aioesphomeapi); today only the
         # private `api._connection.force_disconnect()` is sync.
-        self._close_task = self._loop.create_task(self._async_close(api))
+        self._close_task = self._loop.create_task(self._async_close(api, exc))
 
     def abort(self) -> None:
         """Abort the transport immediately."""
         self.close()
 
-    async def _async_close(self, api: APIClient) -> None:
-        """Close the API connection."""
+    async def _async_close(self, api: APIClient, exc: OSError | None) -> None:
+        """Close the API connection, then tell the protocol why the transport went."""
         assert self._serial is not None
         try:
             await self._serial._call_on_client_loop(api.disconnect())
         finally:
-            self._call_protocol_connection_lost(None)
+            self._call_protocol_connection_lost(exc)
 
     async def _flush(self) -> None:
         """Flush write buffers, waiting until all data is written, internal."""
