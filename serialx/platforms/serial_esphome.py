@@ -122,7 +122,6 @@ MODE_MAP = {
     SerialProxyModeName.RAW: SerialProxyMode.RAW,
     SerialProxyModeName.PROTOCOL: SerialProxyMode.PROTOCOL,
 }
-MODE_NAMES = {mode: name for name, mode in MODE_MAP.items()}
 
 
 def parse_serial_proxy_mode(value: SerialProxyModeName | str) -> SerialProxyModeName:
@@ -253,6 +252,7 @@ class ESPHomeSerial(BaseSerial):
         self._instance_id: int | None = port_instance
         self._mode: SerialProxyModeName = parse_serial_proxy_mode(mode)
         self._usb_serial_number: str | None = usb_serial_number
+        self._active_mode: SerialProxyModeName | None = None
         self._usb_serial_checked: bool = False
         self._password: str | None = password
         self._noise_psk: str | None = key or noise_psk
@@ -372,6 +372,7 @@ class ESPHomeSerial(BaseSerial):
     def _handle_connection_closed(self, event: ConnectionClosedEvent) -> None:
         """Handle the connection being closed."""
         self._instance_subscribed = False
+        self._active_mode = None
         self._mark_broken(connection_closed_error(event))
 
         # Wake a blocked reader so it raises instead of waiting out its timeout.
@@ -389,14 +390,11 @@ class ESPHomeSerial(BaseSerial):
 
     @property
     def tap_mode(self) -> SerialProxyModeName | None:
-        """The mode a tap on this port can handle on the client's behalf.
+        """The mode the device confirmed for this port, or `None` before subscribing.
 
-        `None` until the port has been resolved. `raw` means the port has no tap, so a
-        client must do the protocol's work itself.
+        `raw` means the port has no tap, so a client must do the protocol's work itself.
         """
-        if self._port_info is None:
-            return None
-        return MODE_NAMES[self._port_info.tap_mode]
+        return self._active_mode
 
     @property
     def is_open(self) -> bool:
@@ -610,18 +608,6 @@ class ESPHomeSerial(BaseSerial):
         await self._resolve_instance_id()
         assert self._instance_id is not None
 
-        # Set before the device starts streaming: a framed protocol cannot have its first
-        # bytes reinterpreted after the fact. The data handler is already installed, so
-        # nothing arriving between the mode change and the subscribe is dropped.
-        #
-        # Always sent, including for `raw`: a client that wants raw bytes -- a firmware
-        # flasher above all -- has to be able to turn the tap's injection off.
-        self._schedule_on_client_loop(
-            self._api.serial_proxy_set_mode,
-            instance=self._instance_id,
-            mode=MODE_MAP[self._mode],
-        )
-
         # Awaited, not scheduled: the device answers a claim, and a refusal has to become an
         # exception here. Fire-and-forget would leave a rejected client waiting on a port it
         # never got, which looks exactly like a device with nothing to say.
@@ -631,9 +617,25 @@ class ESPHomeSerial(BaseSerial):
                 timeout=self._connect_timeout,
             )
         )
-        # The mode change was scheduled ahead of the subscribe on the same loop and the
-        # device handles messages in receive order, so an answer proves it landed first.
         self._instance_subscribed = True
+
+        # Only the subscriber may set the mode, and `raw` is sent too so a client that
+        # wants plain bytes can turn a tap off that an earlier session left on
+        response = await self._call_on_client_loop(
+            self._api.serial_proxy_set_mode_await_response(
+                instance=self._instance_id,
+                mode=MODE_MAP[self._mode],
+                timeout=self._connect_timeout,
+            )
+        )
+
+        # A port with no tap refuses PROTOCOL; that is a fact about the port, not a failure
+        if response.status is SerialProxyStatus.NOT_SUPPORTED:
+            self._active_mode = SerialProxyModeName.RAW
+        elif (factory := STATUS_TO_ERROR_MAP.get(response.status)) is not None:
+            raise factory(f"cannot set the mode of serial proxy {self._port_name!r}")
+        else:
+            self._active_mode = self._mode
 
     def _unsubscribe_instance(self) -> None:
         """Unsubscribe serial proxy streaming for this instance if supported."""
@@ -647,6 +649,7 @@ class ESPHomeSerial(BaseSerial):
             )
 
         self._instance_subscribed = False
+        self._active_mode = None
 
     def _reconfigure_port(self, update: PortSettingsUpdate) -> None:
         """Configure the serial port settings."""
@@ -666,6 +669,9 @@ class ESPHomeSerial(BaseSerial):
         await self._resolve_instance_id()
         assert self._instance_id is not None
 
+        # Since API 1.17 only the subscribed client may configure a port
+        await self._subscribe_instance()
+
         await self._call_on_client_loop_validated(
             self._api.serial_proxy_configure_await_response(
                 instance=self._instance_id,
@@ -676,10 +682,6 @@ class ESPHomeSerial(BaseSerial):
                 data_size=self._byte_size,
             )
         )
-
-        # Subscribe after configure has landed so we don't stream bytes
-        # under stale UART settings. Idempotent on reconfigure.
-        await self._subscribe_instance()
 
     def _compute_line_states(self, modem_pins: ModemPins) -> LineStateFlag:
         line_states = self._last_line_states
@@ -777,7 +779,7 @@ class ESPHomeSerial(BaseSerial):
         """Flush write buffers."""
         assert self._api is not None
         assert self._instance_id is not None
-        await self._call_on_client_loop(
+        await self._call_on_client_loop_validated(
             self._api.serial_proxy_flush(instance=self._instance_id)
         )
 

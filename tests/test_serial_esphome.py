@@ -23,6 +23,7 @@ from aioesphomeapi.model import (
     DeviceInfo,
     SerialProxyMode,
     SerialProxyParity,
+    SerialProxyRequestResponse,
     SerialProxyStatus,
     SerialProxyUsbInfo,
 )
@@ -115,7 +116,7 @@ def base64(key: bytes) -> str:
 PROXY_CALL_NAMES = (
     "subscribe_serial_proxy_data",
     "serial_proxy_configure_await_response",
-    "serial_proxy_set_mode",
+    "serial_proxy_set_mode_await_response",
     "serial_proxy_subscribe_await_response",
 )
 
@@ -143,6 +144,10 @@ def mock_api_client(*port_names: str) -> MagicMock:
     )
     api.attach_mock(
         AsyncMock(return_value=None), "serial_proxy_subscribe_await_response"
+    )
+    api.attach_mock(
+        AsyncMock(return_value=SerialProxyRequestResponse(status=SerialProxyStatus.OK)),
+        "serial_proxy_set_mode_await_response",
     )
     # Recent enough that the validated helper does not fall back to a flushing ping
     api.api_version = MIN_VERSION_PROXY_ACK
@@ -675,6 +680,10 @@ async def test_mode_protocol_set_before_subscribe() -> None:
     assert proxy_calls(api) == [
         # The data handler is installed before anything can stream
         call.subscribe_serial_proxy_data(ANY),
+        call.serial_proxy_subscribe_await_response(1, timeout=ANY),
+        call.serial_proxy_set_mode_await_response(
+            instance=1, mode=SerialProxyMode.PROTOCOL, timeout=ANY
+        ),
         call.serial_proxy_configure_await_response(
             instance=1,
             baudrate=115200,
@@ -683,8 +692,6 @@ async def test_mode_protocol_set_before_subscribe() -> None:
             stop_bits=1,
             data_size=8,
         ),
-        call.serial_proxy_set_mode(instance=1, mode=SerialProxyMode.PROTOCOL),
-        call.serial_proxy_subscribe_await_response(1, timeout=ANY),
     ]
 
 
@@ -704,6 +711,10 @@ async def test_mode_protocol_kwarg_with_external_api() -> None:
 
     assert proxy_calls(api) == [
         call.subscribe_serial_proxy_data(ANY),
+        call.serial_proxy_subscribe_await_response(0, timeout=ANY),
+        call.serial_proxy_set_mode_await_response(
+            instance=0, mode=SerialProxyMode.PROTOCOL, timeout=ANY
+        ),
         call.serial_proxy_configure_await_response(
             instance=0,
             baudrate=115200,
@@ -712,8 +723,6 @@ async def test_mode_protocol_kwarg_with_external_api() -> None:
             stop_bits=1,
             data_size=8,
         ),
-        call.serial_proxy_set_mode(instance=0, mode=SerialProxyMode.PROTOCOL),
-        call.serial_proxy_subscribe_await_response(0, timeout=ANY),
     ]
 
 
@@ -729,6 +738,10 @@ async def test_mode_raw_is_sent_explicitly(query: str) -> None:
 
     assert proxy_calls(api) == [
         call.subscribe_serial_proxy_data(ANY),
+        call.serial_proxy_subscribe_await_response(0, timeout=ANY),
+        call.serial_proxy_set_mode_await_response(
+            instance=0, mode=SerialProxyMode.RAW, timeout=ANY
+        ),
         call.serial_proxy_configure_await_response(
             instance=0,
             baudrate=115200,
@@ -737,8 +750,6 @@ async def test_mode_raw_is_sent_explicitly(query: str) -> None:
             stop_bits=1,
             data_size=8,
         ),
-        call.serial_proxy_set_mode(instance=0, mode=SerialProxyMode.RAW),
-        call.serial_proxy_subscribe_await_response(0, timeout=ANY),
     ]
 
 
