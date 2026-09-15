@@ -27,6 +27,7 @@ from aioesphomeapi.model import (
     SerialProxyRequestResponse,
     SerialProxyStatus,
     SerialProxyUsbInfo,
+    SerialProxyUsbInfoFlag,
 )
 
 from serialx import (
@@ -777,7 +778,7 @@ def _usb_info(**overrides: object) -> SerialProxyUsbInfo:
     fields = {
         "instance": 0,
         "status": SerialProxyStatus.OK,
-        "connected": True,
+        "flags": SerialProxyUsbInfoFlag.CONNECTED,
         "vendor_id": 0x303A,
         "product_id": 0x4001,
         "bcd_device": 0x0101,
@@ -824,7 +825,7 @@ async def test_usb_serial_number_with_nothing_attached_is_rejected() -> None:
     """An empty socket is a mismatch, not a silent success."""
     api = mock_api_client("Zigbee")
     api.attach_mock(
-        AsyncMock(return_value=_usb_info(connected=False, serial_number="")),
+        AsyncMock(return_value=_usb_info(flags=0, serial_number="")),
         "serial_proxy_get_usb_info",
     )
     url = "esphome://127.0.0.1:6053/?port_name=Zigbee&usb_serial=AABBCCDDEEFF"
@@ -868,11 +869,11 @@ async def test_usb_device_removed_breaks_transport() -> None:
 
             # Another port's device is not our business
             for handler in handlers:
-                handler(_usb_info(instance=1, connected=False, serial_number=""))
+                handler(_usb_info(instance=1, flags=0, serial_number=""))
             assert not serial.transport.is_closing()
 
             for handler in handlers:
-                handler(_usb_info(connected=False, serial_number=""))
+                handler(_usb_info(flags=0, serial_number=""))
 
             with pytest.raises(OSError) as excinfo:
                 await serial.read(1)
@@ -905,7 +906,7 @@ async def test_usb_device_removed_leaves_external_api_alone() -> None:
         baudrate=115200,
     ) as serial:
         for handler in _usb_info_handlers(api):
-            handler(_usb_info(connected=False, serial_number=""))
+            handler(_usb_info(flags=0, serial_number=""))
 
         with pytest.raises(OSError):
             await serial.read(1)
@@ -956,7 +957,7 @@ async def test_usb_device_removed_without_expected_serial() -> None:
     with patch("serialx.platforms.serial_esphome.APIClient", return_value=api):
         async with async_serial_for_url(url=url, baudrate=115200) as serial:
             for handler in _usb_info_handlers(api):
-                handler(_usb_info(connected=False, serial_number=""))
+                handler(_usb_info(flags=0, serial_number=""))
 
             with pytest.raises(OSError):
                 await serial.read(1)
