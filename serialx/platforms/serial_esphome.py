@@ -51,6 +51,7 @@ from aioesphomeapi.model import (
     SerialProxyRequestResponse,
     SerialProxyStatus,
     SerialProxyUsbInfo,
+    SerialProxyUsbInfoFlag,
 )
 from typing_extensions import Buffer, Unpack
 
@@ -395,7 +396,7 @@ class ESPHomeSerial(BaseSerial):
         if info.status is not SerialProxyStatus.OK:
             return None
 
-        if not info.connected:
+        if not info.flags & SerialProxyUsbInfoFlag.CONNECTED:
             return OSError(
                 errno.ENXIO, f"USB device removed from serial proxy {self._port_name!r}"
             )
@@ -653,7 +654,7 @@ class ESPHomeSerial(BaseSerial):
             if error_factory is not None:
                 raise error_factory("cannot read the port's USB identity")
 
-        if not usb_info.connected:
+        if not usb_info.flags & SerialProxyUsbInfoFlag.CONNECTED:
             raise SerialException(
                 f"No USB device is attached to serial proxy {self._port_name!r}"
             )
