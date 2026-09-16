@@ -292,6 +292,7 @@ class AllConnectKwargs(_CommonConnectKwargs, total=False):
     api: APIClient | None
     port_name: str | None
     port_instance: int | None
+    mode: str
     key: str | None
     password: str | None
     noise_psk: str | None
@@ -310,6 +311,7 @@ BACKEND_CONNECT_KWARGS: dict[str, frozenset[str]] = {
             "connect_timeout",
             "port_name",
             "port_instance",
+            "mode",
             "key",
             "password",
             "noise_psk",

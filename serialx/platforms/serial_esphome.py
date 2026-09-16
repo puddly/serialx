@@ -25,7 +25,7 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Callable, Coroutine
 from contextlib import suppress
-from enum import IntFlag
+from enum import Enum, IntFlag
 import errno
 import functools
 import logging
@@ -45,6 +45,11 @@ from aioesphomeapi.model import (
     ConnectionClosedEvent,
     DisconnectReason,
     SerialProxyDataReceived,
+    SerialProxyIdentity,
+    SerialProxyIdentityFlag,
+    SerialProxyIdentitySource,
+    SerialProxyInfo,
+    SerialProxyMode,
     SerialProxyParity,
     SerialProxyRequestResponse,
     SerialProxyStatus,
@@ -107,6 +112,31 @@ class InvalidSettingsError(SerialException):
     """Raised when the provided settings are invalid."""
 
 
+class SerialProxyModeName(str, Enum):
+    """Mode requested from the ESPHome serial proxy."""
+
+    RAW = "raw"
+    PROTOCOL = "protocol"
+
+
+# The device's own spelling of the modes, both ways
+MODE_MAP = {
+    SerialProxyModeName.RAW: SerialProxyMode.RAW,
+    SerialProxyModeName.PROTOCOL: SerialProxyMode.PROTOCOL,
+}
+
+
+def parse_serial_proxy_mode(value: SerialProxyModeName | str) -> SerialProxyModeName:
+    """Parse a serial proxy mode name, rejecting unknown values."""
+    try:
+        return SerialProxyModeName(value)
+    except ValueError:
+        valid = ", ".join(mode.value for mode in SerialProxyModeName)
+        raise InvalidSettingsError(
+            f"Invalid serial proxy mode {value!r}, expected one of: {valid}"
+        ) from None
+
+
 def translate_esphome_errors(
     func: Callable[_P, Coroutine[Any, Any, _T]],
 ) -> Callable[_P, Coroutine[Any, Any, _T]]:
@@ -163,6 +193,8 @@ class ESPHomeSerial(BaseSerial):
         api: APIClient | None = None,
         port_name: str | None = None,
         port_instance: int | None = None,
+        mode: SerialProxyModeName | str = SerialProxyModeName.RAW,
+        serial_number: str | None = None,
         key: str | None = None,
         password: str | None = None,
         noise_psk: str | None = None,
@@ -181,10 +213,16 @@ class ESPHomeSerial(BaseSerial):
                 be skipped and the API will not be disconnected once the serial object
                 is closed.
             port_name: The `name` attribute of the ESPHome serial proxy to connect to.
+            serial_number: Serial number the device behind the port must report. A
+                port is a socket, so without this the connection succeeds against
+                whatever happens to be plugged in. Also read from a ``serial_number``
+                query parameter.
             port_instance: The numerical instance ID of the ESPHome serial proxy
                 instance to connect to.
 
                 .. deprecated:: 1.2.0
+            mode: The mode the serial proxy should use, either `raw` (the default)
+                or `protocol` to engage the port's protocol-aware tap.
             key: The Noise PSK to use when creating an `aioesphomeapi.APIClient`
                 instance.
             password: The API password to use when creating an `aioesphomeapi.APIClient`
@@ -216,7 +254,14 @@ class ESPHomeSerial(BaseSerial):
             api.loop if api is not None else None
         )
         self._port_name: str | None = port_name
+        # When set, the port must have this exact device attached or the claim is refused
+        # What the device says about the resolved port, known once it has been resolved
+        self._port_info: SerialProxyInfo | None = None
         self._instance_id: int | None = port_instance
+        self._mode: SerialProxyModeName = parse_serial_proxy_mode(mode)
+        self._serial_number: str | None = serial_number
+        self._active_mode: SerialProxyModeName | None = None
+        self._serial_number_checked: bool = False
         self._password: str | None = password
         self._noise_psk: str | None = key or noise_psk
         self._disconnect_api: bool = False
@@ -225,6 +270,7 @@ class ESPHomeSerial(BaseSerial):
         self._read_event = asyncio.Event()
         self._unsub: Callable[[], None] | None = None
         self._closed_unsub: Callable[[], None] | None = None
+        self._identity_unsub: Callable[[], None] | None = None
         self._instance_subscribed = False
 
         self._last_line_states = LineStateFlag(0)
@@ -335,12 +381,64 @@ class ESPHomeSerial(BaseSerial):
     def _handle_connection_closed(self, event: ConnectionClosedEvent) -> None:
         """Handle the connection being closed."""
         self._instance_subscribed = False
+        self._active_mode = None
         self._mark_broken(connection_closed_error(event))
 
         # Wake a blocked reader so it raises instead of waiting out its timeout.
         self._read_event.set()
 
         self._unsubscribe_connection_closed()
+
+    def _identity_lost_error(self, identity: SerialProxyIdentity) -> OSError | None:
+        """Return the error an identity message means for this port, if any."""
+        if self._instance_id is None or identity.instance != self._instance_id:
+            return None
+
+        # A port with no identity, or one whose descriptors could not be read, says
+        # nothing about whether the device is still there
+        if (
+            identity.source is SerialProxyIdentitySource.NONE
+            or identity.flags & SerialProxyIdentityFlag.ERROR
+        ):
+            return None
+
+        if not identity.flags & SerialProxyIdentityFlag.CONNECTED:
+            return OSError(
+                errno.ENXIO, f"Device removed from serial proxy {self._port_name!r}"
+            )
+
+        if (
+            self._serial_number is not None
+            and identity.serial_number != self._serial_number
+        ):
+            return OSError(
+                errno.ENXIO,
+                f"Serial proxy {self._port_name!r} now has device"
+                f" {identity.serial_number!r} attached, expected {self._serial_number!r}",
+            )
+
+        return None
+
+    def _on_identity(self, identity: SerialProxyIdentity) -> None:
+        """Handle an identity message, called on the client's loop."""
+        client_loop = self._client_loop
+        if client_loop is None or client_loop is self._loop:
+            self._handle_identity(identity)
+        else:
+            assert self._loop is not None
+            self._loop.call_soon_threadsafe(self._handle_identity, identity)
+
+    def _handle_identity(self, identity: SerialProxyIdentity) -> None:
+        """Break the port when the device behind it went away."""
+        exc = self._identity_lost_error(identity)
+        if exc is None:
+            return
+
+        # The port's subscription and the API connection are both still alive; only the
+        # device is gone. Like a pulled cable, that is the end of this session, and a new
+        # one has to be opened once something is plugged back in.
+        self._mark_broken(exc)
+        self._read_event.set()
 
     def _open(self) -> None:
         """Open the serial port."""
@@ -349,6 +447,14 @@ class ESPHomeSerial(BaseSerial):
         self._read_event = asyncio.Event()
         self._call_on_loop(self._async_open())
         self._call_on_loop(self._async_register_data_handler())
+
+    @property
+    def tap_mode(self) -> SerialProxyModeName | None:
+        """The mode the device confirmed for this port, or `None` before subscribing.
+
+        `raw` means the port has no tap, so a client must do the protocol's work itself.
+        """
+        return self._active_mode
 
     @property
     def is_open(self) -> bool:
@@ -377,6 +483,12 @@ class ESPHomeSerial(BaseSerial):
                 self._instance_id = int(port_value)
             elif not self._port_name:
                 self._port_name = port_value
+
+            if "serial_number" in params:
+                self._serial_number = params["serial_number"][0]
+
+            if "mode" in params:
+                self._mode = parse_serial_proxy_mode(params["mode"][0])
 
             if "password" in params:
                 self._password = params["password"][0]
@@ -412,10 +524,23 @@ class ESPHomeSerial(BaseSerial):
                 self._register_closed_handler()
             )
 
+        # Before the port is resolved and its serial number checked, so a device pulled in
+        # between is not missed. The device only reports identity changes to a client that
+        # subscribed, and subscribing is what this registration does.
+        if self._identity_unsub is None:
+            self._identity_unsub = await self._call_on_client_loop(
+                self._register_identity_handler()
+            )
+
     async def _register_closed_handler(self) -> Callable[[], None]:
         """Register `_on_connection_closed` on the client's loop and return the unsub."""
         assert self._api is not None
         return self._api.add_connection_closed_callback(self._on_connection_closed)
+
+    async def _register_identity_handler(self) -> Callable[[], None]:
+        """Subscribe `_on_identity` to identity messages on the client's loop, return the unsub."""
+        assert self._api is not None
+        return self._api.subscribe_serial_proxy_identity(self._on_identity)
 
     @translate_esphome_errors
     async def _async_list_serial_ports(self) -> list[SerialPortInfo]:
@@ -490,9 +615,20 @@ class ESPHomeSerial(BaseSerial):
 
     async def _resolve_instance_id(self) -> None:
         """Resolve `_instance_id` from `_port_name` against the device."""
-        if self._api is None or self._instance_id is not None:
+        if self._api is None:
             return
 
+        if self._instance_id is None:
+            await self._resolve_instance_id_from_name()
+
+        # Also reached when `port_instance` skipped the lookup above
+        if self._serial_number is not None and not self._serial_number_checked:
+            self._serial_number_checked = True
+            await self._check_serial_number()
+
+    async def _resolve_instance_id_from_name(self) -> None:
+        """Look `_instance_id` up by `_port_name`."""
+        assert self._api is not None
         assert self._port_name is not None
         info = await self._call_on_client_loop(self._api.device_info())
 
@@ -507,8 +643,42 @@ class ESPHomeSerial(BaseSerial):
                 f" does not exist in {name_to_info_mapping!r}"
             )
 
-        instance_id, _proxy_info = name_to_info_mapping[self._port_name]
+        instance_id, proxy_info = name_to_info_mapping[self._port_name]
         self._instance_id = instance_id
+        self._port_info = proxy_info
+
+    async def _check_serial_number(self) -> None:
+        """Fail unless the device behind the port reports the expected serial number."""
+        assert self._api is not None
+        assert self._instance_id is not None
+
+        identity = await self._call_on_client_loop(
+            self._api.serial_proxy_get_identity(self._instance_id)
+        )
+
+        if identity.source is SerialProxyIdentitySource.NONE:
+            raise SerialException(
+                f"Serial proxy {self._port_name!r} reports no identity to check the"
+                " serial number against"
+            )
+
+        if identity.flags & SerialProxyIdentityFlag.ERROR:
+            raise SerialException(
+                "Cannot read the identity of the device behind serial proxy"
+                f" {self._port_name!r}"
+            )
+
+        if not identity.flags & SerialProxyIdentityFlag.CONNECTED:
+            raise SerialException(
+                f"No device is attached to serial proxy {self._port_name!r}"
+            )
+
+        if identity.serial_number != self._serial_number:
+            raise SerialException(
+                f"Serial proxy {self._port_name!r} has device"
+                f" {identity.serial_number!r} attached, expected"
+                f" {self._serial_number!r}"
+            )
 
     async def _subscribe_instance(self) -> None:
         """Subscribe serial proxy streaming for this instance if supported."""
@@ -518,11 +688,34 @@ class ESPHomeSerial(BaseSerial):
         await self._resolve_instance_id()
         assert self._instance_id is not None
 
+        # Awaited, not scheduled: the device answers a claim, and a refusal has to become an
+        # exception here. Fire-and-forget would leave a rejected client waiting on a port it
+        # never got, which looks exactly like a device with nothing to say.
         await self._call_on_client_loop_validated(
-            self._api.serial_proxy_subscribe_await_response(self._instance_id)
+            self._api.serial_proxy_subscribe_await_response(
+                self._instance_id,
+                timeout=self._connect_timeout,
+            )
+        )
+        self._instance_subscribed = True
+
+        # Only the subscriber may set the mode, and `raw` is sent too so a client that
+        # wants plain bytes can turn a tap off that an earlier session left on
+        response = await self._call_on_client_loop(
+            self._api.serial_proxy_set_mode_await_response(
+                instance=self._instance_id,
+                mode=MODE_MAP[self._mode],
+                timeout=self._connect_timeout,
+            )
         )
 
-        self._instance_subscribed = True
+        # A port with no tap refuses PROTOCOL; that is a fact about the port, not a failure
+        if response.status is SerialProxyStatus.NOT_SUPPORTED:
+            self._active_mode = SerialProxyModeName.RAW
+        elif (factory := STATUS_TO_ERROR_MAP.get(response.status)) is not None:
+            raise factory(f"cannot set the mode of serial proxy {self._port_name!r}")
+        else:
+            self._active_mode = self._mode
 
     def _unsubscribe_instance(self) -> None:
         """Unsubscribe serial proxy streaming for this instance if supported."""
@@ -536,6 +729,7 @@ class ESPHomeSerial(BaseSerial):
             )
 
         self._instance_subscribed = False
+        self._active_mode = None
 
     def _configure_port(self) -> None:
         """Configure the serial port settings."""
@@ -548,6 +742,9 @@ class ESPHomeSerial(BaseSerial):
         await self._resolve_instance_id()
         assert self._instance_id is not None
 
+        # Since API 1.17 only the subscribed client may configure a port
+        await self._subscribe_instance()
+
         await self._call_on_client_loop_validated(
             self._api.serial_proxy_configure_await_response(
                 instance=self._instance_id,
@@ -558,10 +755,6 @@ class ESPHomeSerial(BaseSerial):
                 data_size=self._byte_size,
             )
         )
-
-        # Subscribe after configure has landed so we don't stream bytes
-        # under stale UART settings. Idempotent on reconfigure.
-        await self._subscribe_instance()
 
     def _compute_line_states(self, modem_pins: ModemPins) -> LineStateFlag:
         line_states = self._last_line_states
@@ -659,7 +852,7 @@ class ESPHomeSerial(BaseSerial):
         """Flush write buffers."""
         assert self._api is not None
         assert self._instance_id is not None
-        await self._call_on_client_loop(
+        await self._call_on_client_loop_validated(
             self._api.serial_proxy_flush(instance=self._instance_id)
         )
 
@@ -709,6 +902,10 @@ class ESPHomeSerial(BaseSerial):
             self._schedule_on_client_loop(self._unsub)
             self._unsub = None
 
+        if self._identity_unsub is not None:
+            self._schedule_on_client_loop(self._identity_unsub)
+            self._identity_unsub = None
+
         self._unsubscribe_connection_closed()
 
     async def _async_close(self) -> None:
@@ -752,6 +949,7 @@ class ESPHomeSerialTransport(BaseSerialTransport):
         super().__init__(loop, protocol)
         self._unsub: Callable[[], None] | None = None
         self._closed_unsub: Callable[[], None] | None = None
+        self._identity_unsub: Callable[[], None] | None = None
         self._close_task: asyncio.Task[None] | None = None
 
     @translate_esphome_errors
@@ -765,18 +963,25 @@ class ESPHomeSerialTransport(BaseSerialTransport):
         await self._serial._async_open()
 
         assert self._serial._api is not None
-        await self._serial._async_configure_port()
+        # Install the data handler *before* subscribing. The device starts streaming as
+        # soon as the subscribe lands, so anything it sends in the gap -- a bootloader
+        # banner, a chatty sensor's first reading -- is silently dropped.
         self._unsub = await self._serial._call_on_client_loop(
             self._register_transport_data_handler()
         )
         self._closed_unsub = await self._serial._call_on_client_loop(
             self._register_transport_closed_handler()
         )
+        self._identity_unsub = await self._serial._call_on_client_loop(
+            self._register_transport_identity_handler()
+        )
 
         # Nothing is replayed for a connection that closed while we were setting
         # up, so the state has to be re-checked once the callback is installed.
         if not self._serial._api.is_connected:
             raise SerialException("ESPHome API connection closed while connecting")
+
+        await self._serial._async_configure_port()
 
         self._call_protocol_connection_made()
 
@@ -817,6 +1022,39 @@ class ESPHomeSerialTransport(BaseSerialTransport):
         if self._closed_unsub is not None:
             self._schedule_unsub(self._closed_unsub)
             self._closed_unsub = None
+
+    async def _register_transport_identity_handler(self) -> Callable[[], None]:
+        """Subscribe `_on_api_identity` to identity messages on the client's loop."""
+        assert self._serial is not None
+        assert self._serial._api is not None
+
+        # This isn't a coroutine but needs to be run in the target loop
+        unsub: Callable[[], None] = self._serial._api.subscribe_serial_proxy_identity(
+            self._on_api_identity
+        )
+        return unsub
+
+    def _on_api_identity(self, identity: SerialProxyIdentity) -> None:
+        """Handle an identity message, called on the client's loop."""
+        assert self._serial is not None
+
+        exc = self._serial._identity_lost_error(identity)
+        if exc is None:
+            return
+
+        client_loop = self._serial._client_loop
+        if client_loop is None or client_loop is self._loop:
+            self._device_lost(exc)
+        else:
+            self._loop.call_soon_threadsafe(self._device_lost, exc)
+
+    def _device_lost(self, exc: OSError) -> None:
+        """Tear down the transport after the device behind the port went away."""
+        if self._connection_lost_called or self._closing:
+            return
+
+        self._mark_broken(exc)
+        self._close_with(exc)
 
     def _schedule_unsub(self, unsub: Callable[[], None]) -> None:
         """Run an unsub on the client's loop, or inline if the serial is gone."""
@@ -866,20 +1104,28 @@ class ESPHomeSerialTransport(BaseSerialTransport):
         """Close the transport."""
         if self._closing:
             return
-        self._closing = True
         self._mark_user_closed()
+        self._close_with(None)
+
+    def _close_with(self, exc: OSError | None) -> None:
+        """Release everything and tell the protocol why, or None for a clean close."""
+        self._closing = True
 
         serial = self._serial
         if self._unsub is not None:
             self._schedule_unsub(self._unsub)
             self._unsub = None
 
+        if self._identity_unsub is not None:
+            self._schedule_unsub(self._identity_unsub)
+            self._identity_unsub = None
+
         if self._closed_unsub is not None:
             self._schedule_unsub(self._closed_unsub)
             self._closed_unsub = None
 
         if serial is None:
-            self._call_protocol_connection_lost(None)
+            self._call_protocol_connection_lost(exc)
             return
 
         serial._unsubscribe_instance()
@@ -887,31 +1133,31 @@ class ESPHomeSerialTransport(BaseSerialTransport):
 
         if not serial._disconnect_api:
             # Transport does not own the external API lifecycle.
-            self._call_protocol_connection_lost(None)
+            self._call_protocol_connection_lost(exc)
             return
 
         api = serial._api
         serial._api = None
         if api is None:
-            self._call_protocol_connection_lost(None)
+            self._call_protocol_connection_lost(exc)
             return
 
         # TODO: clean shutdown without `wait_closed()` needs a public sync
         # force-disconnect on APIClient (aioesphomeapi); today only the
         # private `api._connection.force_disconnect()` is sync.
-        self._close_task = self._loop.create_task(self._async_close(api))
+        self._close_task = self._loop.create_task(self._async_close(api, exc))
 
     def abort(self) -> None:
         """Abort the transport immediately."""
         self.close()
 
-    async def _async_close(self, api: APIClient) -> None:
-        """Close the API connection."""
+    async def _async_close(self, api: APIClient, exc: OSError | None) -> None:
+        """Close the API connection, then tell the protocol why the transport went."""
         assert self._serial is not None
         try:
             await self._serial._call_on_client_loop(api.disconnect())
         finally:
-            self._call_protocol_connection_lost(None)
+            self._call_protocol_connection_lost(exc)
 
     async def _flush(self) -> None:
         """Flush write buffers, waiting until all data is written, internal."""
