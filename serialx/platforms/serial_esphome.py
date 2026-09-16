@@ -45,13 +45,14 @@ from aioesphomeapi.model import (
     ConnectionClosedEvent,
     DisconnectReason,
     SerialProxyDataReceived,
+    SerialProxyIdentity,
+    SerialProxyIdentityFlag,
+    SerialProxyIdentitySource,
     SerialProxyInfo,
     SerialProxyMode,
     SerialProxyParity,
     SerialProxyRequestResponse,
     SerialProxyStatus,
-    SerialProxyUsbInfo,
-    SerialProxyUsbInfoFlag,
 )
 from typing_extensions import Buffer, Unpack
 
@@ -193,7 +194,7 @@ class ESPHomeSerial(BaseSerial):
         port_name: str | None = None,
         port_instance: int | None = None,
         mode: SerialProxyModeName | str = SerialProxyModeName.RAW,
-        usb_serial_number: str | None = None,
+        serial_number: str | None = None,
         key: str | None = None,
         password: str | None = None,
         noise_psk: str | None = None,
@@ -212,10 +213,10 @@ class ESPHomeSerial(BaseSerial):
                 be skipped and the API will not be disconnected once the serial object
                 is closed.
             port_name: The `name` attribute of the ESPHome serial proxy to connect to.
-            usb_serial_number: Serial number the USB device behind the port must
-                report. A port is a socket, so without this the connection succeeds
-                against whatever happens to be plugged in. Also read from a
-                ``usb_serial`` query parameter.
+            serial_number: Serial number the device behind the port must report. A
+                port is a socket, so without this the connection succeeds against
+                whatever happens to be plugged in. Also read from a ``serial_number``
+                query parameter.
             port_instance: The numerical instance ID of the ESPHome serial proxy
                 instance to connect to.
 
@@ -253,14 +254,14 @@ class ESPHomeSerial(BaseSerial):
             api.loop if api is not None else None
         )
         self._port_name: str | None = port_name
-        # When set, the port must have this exact USB device attached or the claim is refused
+        # When set, the port must have this exact device attached or the claim is refused
         # What the device says about the resolved port, known once it has been resolved
         self._port_info: SerialProxyInfo | None = None
         self._instance_id: int | None = port_instance
         self._mode: SerialProxyModeName = parse_serial_proxy_mode(mode)
-        self._usb_serial_number: str | None = usb_serial_number
+        self._serial_number: str | None = serial_number
         self._active_mode: SerialProxyModeName | None = None
-        self._usb_serial_checked: bool = False
+        self._serial_number_checked: bool = False
         self._password: str | None = password
         self._noise_psk: str | None = key or noise_psk
         self._disconnect_api: bool = False
@@ -269,7 +270,7 @@ class ESPHomeSerial(BaseSerial):
         self._read_event = asyncio.Event()
         self._unsub: Callable[[], None] | None = None
         self._closed_unsub: Callable[[], None] | None = None
-        self._usb_unsub: Callable[[], None] | None = None
+        self._identity_unsub: Callable[[], None] | None = None
         self._instance_subscribed = False
 
         self._last_line_states = LineStateFlag(0)
@@ -388,43 +389,48 @@ class ESPHomeSerial(BaseSerial):
 
         self._unsubscribe_connection_closed()
 
-    def _usb_device_lost_error(self, info: SerialProxyUsbInfo) -> OSError | None:
-        """Return the error a USB identity message means for this port, if any."""
-        if self._instance_id is None or info.instance != self._instance_id:
+    def _identity_lost_error(self, identity: SerialProxyIdentity) -> OSError | None:
+        """Return the error an identity message means for this port, if any."""
+        if self._instance_id is None or identity.instance != self._instance_id:
             return None
 
-        if info.status is not SerialProxyStatus.OK:
+        # A port with no identity, or one whose descriptors could not be read, says
+        # nothing about whether the device is still there
+        if (
+            identity.source is SerialProxyIdentitySource.NONE
+            or identity.flags & SerialProxyIdentityFlag.ERROR
+        ):
             return None
 
-        if not info.flags & SerialProxyUsbInfoFlag.CONNECTED:
+        if not identity.flags & SerialProxyIdentityFlag.CONNECTED:
             return OSError(
-                errno.ENXIO, f"USB device removed from serial proxy {self._port_name!r}"
+                errno.ENXIO, f"Device removed from serial proxy {self._port_name!r}"
             )
 
         if (
-            self._usb_serial_number is not None
-            and info.serial_number != self._usb_serial_number
+            self._serial_number is not None
+            and identity.serial_number != self._serial_number
         ):
             return OSError(
                 errno.ENXIO,
-                f"Serial proxy {self._port_name!r} now has USB device"
-                f" {info.serial_number!r} attached, expected {self._usb_serial_number!r}",
+                f"Serial proxy {self._port_name!r} now has device"
+                f" {identity.serial_number!r} attached, expected {self._serial_number!r}",
             )
 
         return None
 
-    def _on_usb_info(self, info: SerialProxyUsbInfo) -> None:
-        """Handle a USB identity message, called on the client's loop."""
+    def _on_identity(self, identity: SerialProxyIdentity) -> None:
+        """Handle an identity message, called on the client's loop."""
         client_loop = self._client_loop
         if client_loop is None or client_loop is self._loop:
-            self._handle_usb_info(info)
+            self._handle_identity(identity)
         else:
             assert self._loop is not None
-            self._loop.call_soon_threadsafe(self._handle_usb_info, info)
+            self._loop.call_soon_threadsafe(self._handle_identity, identity)
 
-    def _handle_usb_info(self, info: SerialProxyUsbInfo) -> None:
-        """Break the port when the USB device behind it went away."""
-        exc = self._usb_device_lost_error(info)
+    def _handle_identity(self, identity: SerialProxyIdentity) -> None:
+        """Break the port when the device behind it went away."""
+        exc = self._identity_lost_error(identity)
         if exc is None:
             return
 
@@ -478,8 +484,8 @@ class ESPHomeSerial(BaseSerial):
             elif not self._port_name:
                 self._port_name = port_value
 
-            if "usb_serial" in params:
-                self._usb_serial_number = params["usb_serial"][0]
+            if "serial_number" in params:
+                self._serial_number = params["serial_number"][0]
 
             if "mode" in params:
                 self._mode = parse_serial_proxy_mode(params["mode"][0])
@@ -518,11 +524,12 @@ class ESPHomeSerial(BaseSerial):
                 self._register_closed_handler()
             )
 
-        # Before the port is resolved and its USB identity checked, so a device pulled in
-        # between is not missed
-        if self._usb_unsub is None:
-            self._usb_unsub = await self._call_on_client_loop(
-                self._register_usb_info_handler()
+        # Before the port is resolved and its serial number checked, so a device pulled in
+        # between is not missed. The device only reports identity changes to a client that
+        # subscribed, and subscribing is what this registration does.
+        if self._identity_unsub is None:
+            self._identity_unsub = await self._call_on_client_loop(
+                self._register_identity_handler()
             )
 
     async def _register_closed_handler(self) -> Callable[[], None]:
@@ -530,10 +537,10 @@ class ESPHomeSerial(BaseSerial):
         assert self._api is not None
         return self._api.add_connection_closed_callback(self._on_connection_closed)
 
-    async def _register_usb_info_handler(self) -> Callable[[], None]:
-        """Register `_on_usb_info` on the client's loop and return the unsub."""
+    async def _register_identity_handler(self) -> Callable[[], None]:
+        """Subscribe `_on_identity` to identity messages on the client's loop, return the unsub."""
         assert self._api is not None
-        return self._api.subscribe_serial_proxy_usb_info(self._on_usb_info)
+        return self._api.subscribe_serial_proxy_identity(self._on_identity)
 
     @translate_esphome_errors
     async def _async_list_serial_ports(self) -> list[SerialPortInfo]:
@@ -615,9 +622,9 @@ class ESPHomeSerial(BaseSerial):
             await self._resolve_instance_id_from_name()
 
         # Also reached when `port_instance` skipped the lookup above
-        if self._usb_serial_number is not None and not self._usb_serial_checked:
-            self._usb_serial_checked = True
-            await self._check_usb_serial_number()
+        if self._serial_number is not None and not self._serial_number_checked:
+            self._serial_number_checked = True
+            await self._check_serial_number()
 
     async def _resolve_instance_id_from_name(self) -> None:
         """Look `_instance_id` up by `_port_name`."""
@@ -640,30 +647,37 @@ class ESPHomeSerial(BaseSerial):
         self._instance_id = instance_id
         self._port_info = proxy_info
 
-    async def _check_usb_serial_number(self) -> None:
+    async def _check_serial_number(self) -> None:
         """Fail unless the device behind the port reports the expected serial number."""
         assert self._api is not None
         assert self._instance_id is not None
 
-        usb_info = await self._call_on_client_loop(
-            self._api.serial_proxy_get_usb_info(self._instance_id)
+        identity = await self._call_on_client_loop(
+            self._api.serial_proxy_get_identity(self._instance_id)
         )
 
-        if usb_info.status is not None:
-            error_factory = STATUS_TO_ERROR_MAP.get(usb_info.status)
-            if error_factory is not None:
-                raise error_factory("cannot read the port's USB identity")
-
-        if not usb_info.flags & SerialProxyUsbInfoFlag.CONNECTED:
+        if identity.source is SerialProxyIdentitySource.NONE:
             raise SerialException(
-                f"No USB device is attached to serial proxy {self._port_name!r}"
+                f"Serial proxy {self._port_name!r} reports no identity to check the"
+                " serial number against"
             )
 
-        if usb_info.serial_number != self._usb_serial_number:
+        if identity.flags & SerialProxyIdentityFlag.ERROR:
             raise SerialException(
-                f"Serial proxy {self._port_name!r} has USB device"
-                f" {usb_info.serial_number!r} attached, expected"
-                f" {self._usb_serial_number!r}"
+                "Cannot read the identity of the device behind serial proxy"
+                f" {self._port_name!r}"
+            )
+
+        if not identity.flags & SerialProxyIdentityFlag.CONNECTED:
+            raise SerialException(
+                f"No device is attached to serial proxy {self._port_name!r}"
+            )
+
+        if identity.serial_number != self._serial_number:
+            raise SerialException(
+                f"Serial proxy {self._port_name!r} has device"
+                f" {identity.serial_number!r} attached, expected"
+                f" {self._serial_number!r}"
             )
 
     async def _subscribe_instance(self) -> None:
@@ -888,9 +902,9 @@ class ESPHomeSerial(BaseSerial):
             self._schedule_on_client_loop(self._unsub)
             self._unsub = None
 
-        if self._usb_unsub is not None:
-            self._schedule_on_client_loop(self._usb_unsub)
-            self._usb_unsub = None
+        if self._identity_unsub is not None:
+            self._schedule_on_client_loop(self._identity_unsub)
+            self._identity_unsub = None
 
         self._unsubscribe_connection_closed()
 
@@ -935,7 +949,7 @@ class ESPHomeSerialTransport(BaseSerialTransport):
         super().__init__(loop, protocol)
         self._unsub: Callable[[], None] | None = None
         self._closed_unsub: Callable[[], None] | None = None
-        self._usb_unsub: Callable[[], None] | None = None
+        self._identity_unsub: Callable[[], None] | None = None
         self._close_task: asyncio.Task[None] | None = None
 
     @translate_esphome_errors
@@ -958,8 +972,8 @@ class ESPHomeSerialTransport(BaseSerialTransport):
         self._closed_unsub = await self._serial._call_on_client_loop(
             self._register_transport_closed_handler()
         )
-        self._usb_unsub = await self._serial._call_on_client_loop(
-            self._register_transport_usb_info_handler()
+        self._identity_unsub = await self._serial._call_on_client_loop(
+            self._register_transport_identity_handler()
         )
 
         # Nothing is replayed for a connection that closed while we were setting
@@ -1009,33 +1023,33 @@ class ESPHomeSerialTransport(BaseSerialTransport):
             self._schedule_unsub(self._closed_unsub)
             self._closed_unsub = None
 
-    async def _register_transport_usb_info_handler(self) -> Callable[[], None]:
-        """Register `_on_api_usb_info` on the client's loop, return the unsub."""
+    async def _register_transport_identity_handler(self) -> Callable[[], None]:
+        """Subscribe `_on_api_identity` to identity messages on the client's loop."""
         assert self._serial is not None
         assert self._serial._api is not None
 
         # This isn't a coroutine but needs to be run in the target loop
-        unsub: Callable[[], None] = self._serial._api.subscribe_serial_proxy_usb_info(
-            self._on_api_usb_info
+        unsub: Callable[[], None] = self._serial._api.subscribe_serial_proxy_identity(
+            self._on_api_identity
         )
         return unsub
 
-    def _on_api_usb_info(self, info: SerialProxyUsbInfo) -> None:
-        """Handle a USB identity message, called on the client's loop."""
+    def _on_api_identity(self, identity: SerialProxyIdentity) -> None:
+        """Handle an identity message, called on the client's loop."""
         assert self._serial is not None
 
-        exc = self._serial._usb_device_lost_error(info)
+        exc = self._serial._identity_lost_error(identity)
         if exc is None:
             return
 
         client_loop = self._serial._client_loop
         if client_loop is None or client_loop is self._loop:
-            self._usb_device_lost(exc)
+            self._device_lost(exc)
         else:
-            self._loop.call_soon_threadsafe(self._usb_device_lost, exc)
+            self._loop.call_soon_threadsafe(self._device_lost, exc)
 
-    def _usb_device_lost(self, exc: OSError) -> None:
-        """Tear down the transport after the USB device behind the port went away."""
+    def _device_lost(self, exc: OSError) -> None:
+        """Tear down the transport after the device behind the port went away."""
         if self._connection_lost_called or self._closing:
             return
 
@@ -1102,9 +1116,9 @@ class ESPHomeSerialTransport(BaseSerialTransport):
             self._schedule_unsub(self._unsub)
             self._unsub = None
 
-        if self._usb_unsub is not None:
-            self._schedule_unsub(self._usb_unsub)
-            self._usb_unsub = None
+        if self._identity_unsub is not None:
+            self._schedule_unsub(self._identity_unsub)
+            self._identity_unsub = None
 
         if self._closed_unsub is not None:
             self._schedule_unsub(self._closed_unsub)
