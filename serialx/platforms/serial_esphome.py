@@ -66,7 +66,7 @@ from serialx.common import (
 )
 
 _T = TypeVar("_T")
-_S = TypeVar("_S", bound=SerialProxyRequestResponse | None)
+_S = TypeVar("_S", bound="SerialProxyRequestResponse | None")
 _P = ParamSpec("_P")
 
 LOGGER = logging.getLogger(__name__)
