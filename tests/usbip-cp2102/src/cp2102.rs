@@ -135,6 +135,15 @@ fn config_descriptor() -> Vec<u8> {
     ]
 }
 
+/// The rate the 48 MHz baud generator really produces for a request.
+fn actual_baud(requested: u32) -> u32 {
+    let prescale = if requested <= 365 { 4.0 } else { 1.0 };
+    let div = (48_000_000.0 / (2.0 * prescale * requested as f64))
+        .round()
+        .max(1.0);
+    (48_000_000.0 / (2.0 * prescale * div)).round() as u32
+}
+
 impl Chip {
     fn dtr_out(&self) -> bool {
         self.ctl_hs & CTL_HS_DTR_MASK != 0
@@ -310,15 +319,21 @@ impl Sim {
                 };
                 self.chips[dev].send(packet);
             }
-            EP_OUT => self.chips[dev].pending_out.push_back(PendingOut {
-                seqnum: urb.seqnum,
-                data: urb.data,
-                done: 0,
-            }),
-            EP_IN => self.chips[dev].pending_in.push_back(PendingIn {
-                seqnum: urb.seqnum,
-                length: urb.length as usize,
-            }),
+            EP_OUT => {
+                debug!("[{dev}] bulk out #{} {} bytes", urb.seqnum, urb.data.len());
+                self.chips[dev].pending_out.push_back(PendingOut {
+                    seqnum: urb.seqnum,
+                    data: urb.data,
+                    done: 0,
+                })
+            }
+            EP_IN => {
+                debug!("[{dev}] bulk in #{} up to {} bytes", urb.seqnum, urb.length);
+                self.chips[dev].pending_in.push_back(PendingIn {
+                    seqnum: urb.seqnum,
+                    length: urb.length as usize,
+                })
+            }
             _ => {
                 warn!("urb to unknown endpoint {real_ep:#04x}");
                 self.chips[dev].send(usbip::ret_submit(urb.seqnum, usbip::EPIPE, 0, &[]));
@@ -418,7 +433,7 @@ impl Sim {
             }
             0x19 => vec![],
             0x1e => {
-                chip.fmt.baud = word(0).max(1);
+                chip.fmt.baud = actual_baud(word(0).max(1));
                 vec![]
             }
             _ => return Err(()),
@@ -478,6 +493,7 @@ impl Sim {
                 let data: Vec<u8> = chip.rx.drain(..n).collect();
                 let seqnum = pending.seqnum;
                 chip.pending_in.pop_front();
+                debug!("[{}] bulk in #{seqnum} done: {n} bytes", chip.serial);
                 chip.send(usbip::ret_submit(seqnum, 0, n, &data));
             }
             while let Some(pending) = chip.pending_out.front_mut() {
@@ -493,6 +509,7 @@ impl Sim {
                     let seqnum = pending.seqnum;
                     let len = pending.data.len();
                     chip.pending_out.pop_front();
+                    debug!("[{}] bulk out #{seqnum} done: {len} bytes", chip.serial);
                     chip.send(usbip::ret_submit(seqnum, 0, len, &[]));
                 }
             }
@@ -503,7 +520,8 @@ impl Sim {
     pub fn next_wakeup(&self, now: u64) -> Option<u64> {
         let mut next: Option<u64> = None;
         let mut consider = |t: u64| {
-            if t > now && next.is_none_or(|n| t < n) {
+            let t = t.max(now + 1);
+            if next.is_none_or(|n| t < n) {
                 next = Some(t);
             }
         };

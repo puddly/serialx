@@ -67,14 +67,9 @@ impl Format {
         }
     }
 
-    /// Bits from the start edge to the sample point of the stop bit.
-    fn stop_sample_offset(&self) -> f64 {
-        let parity = if self.parity == Parity::None {
-            0.0
-        } else {
-            1.0
-        };
-        1.5 + self.data_bits as f64 + parity
+    /// Number of bits after the start bit, up to and including the stop bit.
+    fn bits_after_start(&self) -> u32 {
+        self.data_bits as u32 + (self.parity != Parity::None) as u32 + 1
     }
 }
 
@@ -168,16 +163,22 @@ pub struct RxByte {
     pub brk: bool,
 }
 
+/// Samples the line like a UART with a free-running 16x oversampling clock:
+/// a start edge is noticed on the next clock tick, then every bit is sampled
+/// at its 8th tick. Phase relative to the transmitter is arbitrary, so rates
+/// near the tolerance limit fail intermittently, as they do in hardware.
 #[derive(Debug, Default)]
 pub struct Receiver {
     pub cursor: u64,
     wait_high: bool,
 }
 
+const OVERSAMPLE: f64 = 16.0;
+
 impl Receiver {
     /// Consumes every frame whose stop bit sample time is at or before `now`.
     pub fn poll(&mut self, line: &Line, fmt: &Format, now: u64, out: &mut Vec<RxByte>) {
-        let bit = fmt.bit_ns();
+        let tick = fmt.bit_ns() / OVERSAMPLE;
         loop {
             if self.wait_high {
                 match line.next_edge(self.cursor, true) {
@@ -192,12 +193,13 @@ impl Receiver {
                 Some(t) if t <= now => t,
                 _ => return,
             };
-            let sample = |k: f64| (edge as f64 + k * bit).round() as u64;
-            let t_stop = sample(fmt.stop_sample_offset());
+            let t0 = (edge as f64 / tick).ceil() * tick;
+            let sample = |bit: u32| (t0 + (8 + 16 * bit) as f64 * tick).round() as u64;
+            let t_stop = sample(fmt.bits_after_start());
             if t_stop > now {
                 return;
             }
-            let t_half = sample(0.5);
+            let t_half = sample(0);
             if line.level_at(t_half) {
                 // Glitch shorter than half a bit: not a start bit.
                 self.cursor = t_half;
@@ -205,14 +207,14 @@ impl Receiver {
             }
             let mut data = 0u8;
             for k in 0..fmt.data_bits {
-                if line.level_at(sample(1.5 + k as f64)) {
+                if line.level_at(sample(1 + k as u32)) {
                     data |= 1 << k;
                 }
             }
             let parity_sample = if fmt.parity == Parity::None {
                 None
             } else {
-                Some(line.level_at(sample(1.5 + fmt.data_bits as f64)))
+                Some(line.level_at(sample(1 + fmt.data_bits as u32)))
             };
             let parity_ok = match (fmt.parity_bit(data), parity_sample) {
                 (Some(expected), Some(seen)) => expected == seen,
@@ -239,6 +241,8 @@ impl Receiver {
             return line.next_edge(self.cursor, true);
         }
         let edge = line.next_edge(self.cursor, false)?;
-        Some((edge as f64 + fmt.stop_sample_offset() * fmt.bit_ns()).round() as u64)
+        let tick = fmt.bit_ns() / OVERSAMPLE;
+        let t0 = (edge as f64 / tick).ceil() * tick;
+        Some((t0 + (8 + 16 * fmt.bits_after_start()) as f64 * tick).round() as u64)
     }
 }

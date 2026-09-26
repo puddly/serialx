@@ -27,6 +27,7 @@ const ECONNRESET: i32 = -104;
 pub const USB_SPEED_FULL: u32 = 2;
 pub const HEADER_LEN: usize = 48;
 pub const DEVICE_INFO_LEN: usize = 312;
+const FRAME_NS: u64 = 1_000_000;
 
 /// RET_SUBMIT or RET_UNLINK; `data` is the IN payload, empty otherwise.
 fn ret(command: u32, seqnum: u32, status: i32, actual_length: usize, data: &[u8]) -> Vec<u8> {
@@ -111,17 +112,21 @@ impl Server {
         }
     }
 
+    /// Advances the simulation at most once per full-speed USB frame, so
+    /// bulk transfers complete in frame-sized batches like a real host
+    /// controller would, instead of once per byte.
     async fn tick(self: Arc<Self>) {
         loop {
+            let now = self.now();
             let next = {
                 let mut sim = self.sim.lock().unwrap();
-                let now = self.now();
                 sim.step(now);
                 sim.next_wakeup(now)
             };
+            let earliest = self.epoch + Duration::from_nanos(now + FRAME_NS);
             match next {
                 Some(t) => {
-                    let deadline = self.epoch + Duration::from_nanos(t);
+                    let deadline = self.epoch + Duration::from_nanos(t + FRAME_NS);
                     tokio::select! {
                         _ = tokio::time::sleep_until(deadline.into()) => {}
                         _ = self.notify.notified() => {}
@@ -129,6 +134,7 @@ impl Server {
                 }
                 None => self.notify.notified().await,
             }
+            tokio::time::sleep_until(earliest.into()).await;
         }
     }
 
@@ -210,15 +216,12 @@ impl Server {
                         setup: hdr[40..48].try_into().unwrap(),
                         data,
                     };
-                    let mut sim = self.sim.lock().unwrap();
-                    sim.submit(dev, urb);
-                    let now = self.now();
-                    sim.step(now);
-                    drop(sim);
+                    self.sim.lock().unwrap().submit(dev, urb);
                     self.notify.notify_one();
                 }
                 CMD_UNLINK => {
                     let found = self.sim.lock().unwrap().unlink(dev, u32_at(20));
+                    debug!("[{dev}] unlink #{} found={found}", u32_at(20));
                     let status = if found { ECONNRESET } else { 0 };
                     tx.send(ret(RET_UNLINK, seqnum, status, 0, &[])).unwrap();
                 }
