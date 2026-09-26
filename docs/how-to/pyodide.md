@@ -29,3 +29,7 @@ reader, writer = await serialx.open_serial_connection(
 writer.write(b"ping")
 data = await reader.readexactly(4)
 ```
+
+## Limitations
+- Web Serial only accepts port settings on open. `reconfigure_port()` closes and reopens the browser port, which drops DTR and RTS and discards unread bytes. A warning is logged.
+- Software flow control (`xonxoff=True`) is accepted but has no effect.
