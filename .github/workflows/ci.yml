@@ -217,8 +217,6 @@ jobs:
   pytest:
     runs-on: ubuntu-latest
     needs: [prepare-base, compile-esphome, build-ser2net]
-    env:
-      TTY0TTY_COMMIT: "dac0a105bee6997ebb3a06441c7befe3164c9fd1"
     strategy:
       matrix:
         python-version: ["3.10", "3.11", "3.12", "3.13", "3.14"]
@@ -258,31 +256,25 @@ jobs:
         run: |
           sudo install -m 755 ser2net /usr/local/bin/ser2net
           ser2net -v
-      - name: Get kernel version
-        id: kernel
-        run: echo "version=$(uname -r)" >> "$GITHUB_OUTPUT"
-      - name: Restore cached tty0tty module
-        id: cache-tty0tty
+      - name: Restore cached CP2102 emulator
+        id: cache-emulator
         uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
         with:
-          path: tty0tty.ko
-          key: tty0tty-${{ env.TTY0TTY_COMMIT }}-${{ steps.kernel.outputs.version }}
-      - name: Build tty0tty
-        if: steps.cache-tty0tty.outputs.cache-hit != 'true'
-        run: |
-          sudo apt-get install -y linux-headers-$(uname -r)
-          git clone https://github.com/lcgamboa/tty0tty /tmp/tty0tty
-          git -C /tmp/tty0tty checkout $TTY0TTY_COMMIT
-          make -C /tmp/tty0tty/module
-          cp /tmp/tty0tty/module/tty0tty.ko tty0tty.ko
+          path: tests/usbip-cp2102/target/release/usbip-cp2102
+          key: usbip-cp2102-${{ hashFiles('tests/usbip-cp2102/Cargo.toml', 'tests/usbip-cp2102/Cargo.lock', 'tests/usbip-cp2102/src/**') }}
+      - name: Build CP2102 emulator
+        if: steps.cache-emulator.outputs.cache-hit != 'true'
+        run: cargo build --release --manifest-path tests/usbip-cp2102/Cargo.toml
       - name: Install system dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y socat libudev-dev
-      - name: Load tty0tty kernel module
+      - name: Start CP2102 emulator
         run: |
-          sudo insmod tty0tty.ko
-          sudo chmod 666 /dev/tnt0 /dev/tnt1
+          sudo modprobe vhci-hcd || { sudo apt-get install -y "linux-modules-extra-$(uname -r)" && sudo modprobe vhci-hcd; }
+          sudo tests/usbip-cp2102/target/release/usbip-cp2102 > ports.txt 2> emulator.log &
+          timeout 30 sh -c 'until [ "$(wc -l < ports.txt)" -ge 2 ]; do sleep 0.2; done'
+          sudo chmod 666 $(cat ports.txt)
       - name: Set up uv
         run: |
           curl -LsSf https://astral.sh/uv/install.sh | sh
@@ -308,6 +300,9 @@ jobs:
             -p no:sugar \
             --adapter-pair /dev/tnt0,/dev/tnt1,no-rts-cts,no-dtr-dsr,no-num-unwritten-bytes,no-reset-write-buffer,no-write-timeout,no-buffer-control,no-write-buffering \
             tests
+      - name: Show emulator log
+        if: failure()
+        run: cat emulator.log
       - name: Upload coverage artifact
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
