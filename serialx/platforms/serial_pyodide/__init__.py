@@ -296,7 +296,7 @@ class PyodideSerialTransport(BaseSerialTransport):
         """Let queued writes finish, then release the JS writer."""
         if self._writer_task is not None and not self._writer_task.done():
             try:
-                async with asyncio.timeout(self._serial.write_timeout):  # type: ignore[attr-defined,unused-ignore]
+                async with asyncio.timeout(self._serial.close_timeout):  # type: ignore[attr-defined,unused-ignore]
                     _LOGGER.debug("Waiting for pending writes to finish")
                     self._write_queue.put_nowait(ExitSentinel)
                     await self._writer_task
@@ -445,6 +445,7 @@ class PyodideSerialTransport(BaseSerialTransport):
 
     def close(self) -> None:
         """Close the transport."""
+        self._arm_close_timeout()
         self._cleanup(None)
 
 

@@ -337,6 +337,7 @@ class SocketSerialTransport(BaseSerialTransport):
             return
         self._closing = True
         self._mark_user_closed()
+        self._arm_close_timeout()
 
         if self._tcp_transport is not None:
             self._tcp_transport.close()

@@ -870,6 +870,7 @@ class ESPHomeSerialTransport(BaseSerialTransport):
             return
         self._closing = True
         self._mark_user_closed()
+        self._arm_close_timeout()
 
         serial = self._serial
         if self._unsub is not None:

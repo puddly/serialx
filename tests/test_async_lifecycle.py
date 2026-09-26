@@ -16,8 +16,8 @@ import warnings
 
 import pytest
 
-from serialx import BaseSerialTransport, create_serial_connection
-from tests.common import SerialBackend, SerialPair
+from serialx import BaseSerialTransport, PinState, create_serial_connection
+from tests.common import SerialBackend, SerialPair, SerialQuirk, measure_time
 
 
 class ProtocolState(enum.Enum):
@@ -312,6 +312,49 @@ async def test_lifecycle_close_drains_pending_writes(
             await asyncio.sleep(0.05)
 
         assert receiver_proto.total_received == payload
+    finally:
+        receiver.close()
+        await receiver.wait_closed()
+    sender_proto.assert_clean()
+    receiver_proto.assert_clean()
+
+
+@pytest.mark.skip_quirks(SerialQuirk.NO_RTS_CTS)
+async def test_lifecycle_close_timeout_aborts_stalled_drain(
+    serial_pair: SerialPair,
+) -> None:
+    """close() escalates to abort() once `close_timeout` elapses with CTS held."""
+    loop = asyncio.get_running_loop()
+    sender_proto = RecordingProtocol()
+    receiver_proto = RecordingProtocol()
+
+    receiver, _ = await create_serial_connection(
+        loop,
+        lambda: receiver_proto,
+        serial_pair.right,
+        baudrate=9600,
+        rts_on_open=PinState.LOW,
+    )
+    await asyncio.sleep(serial_pair.modem_line_propagation_delay)
+    sender, _ = await create_serial_connection(
+        loop,
+        lambda: sender_proto,
+        serial_pair.left,
+        baudrate=9600,
+        rtscts=True,
+        close_timeout=0.5,
+    )
+
+    try:
+        sender.write(b"x" * 1024)
+        sender.close()
+
+        with measure_time() as elapsed:
+            await asyncio.wait_for(sender.wait_closed(), 5)
+
+        assert 0.3 <= elapsed() <= 2.0
+        assert sender_proto.state is ProtocolState.LOST
+        assert sender_proto.connection_lost_exc is None
     finally:
         receiver.close()
         await receiver.wait_closed()

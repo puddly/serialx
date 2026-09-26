@@ -30,6 +30,8 @@ if TYPE_CHECKING:
 
 LOGGER = logging.getLogger(__name__)
 
+DEFAULT_CLOSE_TIMEOUT = 30.0
+
 
 class Platform(str, Enum):
     """Built-in platform name."""
@@ -248,6 +250,7 @@ class _CommonConnectKwargs(TypedDict, total=False):
     byte_size: int
     read_timeout: float | None
     write_timeout: float | None
+    close_timeout: float | None
     dtr_on_open: PinState
     rts_on_open: PinState
     dtr_on_close: PinState
@@ -451,6 +454,7 @@ class BaseSerial(io.RawIOBase):
         byte_size: int = 8,
         read_timeout: float | None = None,
         write_timeout: float | None = None,
+        close_timeout: float | None = DEFAULT_CLOSE_TIMEOUT,
         dtr_on_open: PinState = PinState.HIGH,
         rts_on_open: PinState = PinState.HIGH,
         dtr_on_close: PinState = PinState.LOW,
@@ -494,6 +498,7 @@ class BaseSerial(io.RawIOBase):
         self._exclusive = exclusive
         self._read_timeout = read_timeout
         self._write_timeout = write_timeout
+        self._close_timeout = close_timeout
 
         if (
             rtsdtr_on_open is not PinState.UNDEFINED
@@ -714,6 +719,11 @@ class BaseSerial(io.RawIOBase):
     def write_timeout(self) -> float | None:
         """Get the write timeout in seconds."""
         return self._write_timeout
+
+    @property
+    def close_timeout(self) -> float | None:
+        """Seconds an async close drains unsent data before aborting, `None` waits."""
+        return self._close_timeout
 
     @maybe_wrap_exceptions
     def get_modem_pins(self) -> ModemPins:
@@ -1222,6 +1232,30 @@ class BaseSerialTransport(asyncio.Transport):
         self._connection_made_called: bool = False
         self._connection_lost_called: bool = False
         self._user_initiated_close: bool = False
+        self._close_timer: asyncio.TimerHandle | None = None
+
+    def _arm_close_timeout(self) -> None:
+        """Escalate a stalled drain to `abort()` once `close_timeout` elapses."""
+        if self._serial is None or self._close_timer is not None:
+            return
+
+        timeout = self._serial.close_timeout
+        if timeout is None or self.get_write_buffer_size() == 0:
+            return
+
+        self._close_timer = self._loop.call_later(timeout, self._on_close_timeout)
+
+    def _on_close_timeout(self) -> None:
+        self._close_timer = None
+        if self._connection_lost_called:
+            return
+
+        LOGGER.warning(
+            "%r: close timed out with %d bytes unsent, aborting",
+            self,
+            self.get_write_buffer_size(),
+        )
+        self.abort()
 
     def _mark_user_closed(self) -> None:
         """Record that the application requested close/abort."""
@@ -1256,6 +1290,10 @@ class BaseSerialTransport(asyncio.Transport):
             return
 
         self._connection_lost_called = True
+
+        if self._close_timer is not None:
+            self._close_timer.cancel()
+            self._close_timer = None
 
         try:
             if self._connection_made_called:
