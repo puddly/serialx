@@ -306,7 +306,7 @@ jobs:
             --cov=serialx \
             -o console_output_style=count \
             -p no:sugar \
-            --adapter-pair /dev/tnt0,/dev/tnt1,no-rts-cts,no-dtr-dsr,no-num-unwritten-bytes,no-reset-write-buffer,no-write-timeout,no-buffer-control \
+            --adapter-pair /dev/tnt0,/dev/tnt1,no-rts-cts,no-dtr-dsr,no-num-unwritten-bytes,no-reset-write-buffer,no-write-timeout,no-buffer-control,no-write-buffering \
             tests
       - name: Upload coverage artifact
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
