@@ -88,19 +88,28 @@ pub struct Server {
     pub sim: Mutex<Sim>,
     notify: Notify,
     epoch: Instant,
+    /// Simulated nanoseconds per wall-clock nanosecond.
+    time_scale: f64,
 }
 
 impl Server {
-    pub fn new(sim: Sim) -> Arc<Self> {
+    pub fn new(sim: Sim, time_scale: f64) -> Arc<Self> {
         Arc::new(Server {
             sim: Mutex::new(sim),
             notify: Notify::new(),
             epoch: Instant::now(),
+            time_scale,
         })
     }
 
+    /// Simulated time now.
     fn now(&self) -> u64 {
-        self.epoch.elapsed().as_nanos() as u64
+        (self.epoch.elapsed().as_nanos() as f64 * self.time_scale) as u64
+    }
+
+    /// Wall-clock instant of a simulated time.
+    fn wall(&self, t: u64) -> tokio::time::Instant {
+        (self.epoch + Duration::from_nanos((t as f64 / self.time_scale) as u64)).into()
     }
 
     pub async fn serve(self: Arc<Self>, listener: TcpListener) {
@@ -123,18 +132,17 @@ impl Server {
                 sim.step(now);
                 sim.next_wakeup(now)
             };
-            let earliest = self.epoch + Duration::from_nanos(now + FRAME_NS);
+            let frame = (FRAME_NS as f64 * self.time_scale) as u64;
             match next {
                 Some(t) => {
-                    let deadline = self.epoch + Duration::from_nanos(t + FRAME_NS);
                     tokio::select! {
-                        _ = tokio::time::sleep_until(deadline.into()) => {}
+                        _ = tokio::time::sleep_until(self.wall(t + frame)) => {}
                         _ = self.notify.notified() => {}
                     }
                 }
                 None => self.notify.notified().await,
             }
-            tokio::time::sleep_until(earliest.into()).await;
+            tokio::time::sleep_until(self.wall(now + frame)).await;
         }
     }
 

@@ -28,6 +28,9 @@ struct Args {
     /// Only run the USB/IP server; attach with the usbip tool yourself.
     #[arg(long)]
     serve_only: bool,
+    /// Run the wire faster than real time by this factor.
+    #[arg(long, default_value_t = 1.0)]
+    time_scale: f64,
 }
 
 fn free_port() -> u32 {
@@ -101,7 +104,7 @@ async fn main() {
     let addr = listener.local_addr().unwrap();
     info!("usbip server on {addr}");
 
-    let server = Server::new(Sim::new(SERIALS));
+    let server = Server::new(Sim::new(SERIALS), args.time_scale);
     let devids = {
         let sim = server.sim.lock().unwrap();
         [sim.devid(0), sim.devid(1)]
