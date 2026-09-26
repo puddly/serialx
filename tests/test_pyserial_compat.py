@@ -109,7 +109,8 @@ def test_compat_baudrate_setter(serial_pair: SerialPair) -> None:
     """Test that the deprecated .baudrate setter reconfigures the port."""
     with Serial.from_url(serial_pair.left, baudrate=9600) as s:
         assert s.baudrate == 9600
-        s.baudrate = 115200
+        with pytest.warns(DeprecationWarning, match="baudrate"):
+            s.baudrate = 115200
         assert s.baudrate == 115200
 
 
@@ -119,7 +120,8 @@ def test_compat_data_bits(serial_pair: SerialPair) -> None:
         assert s.data_bits == 7
         assert s.byte_size == 7
 
-        s.data_bits = 8
+        with pytest.warns(DeprecationWarning, match="data_bits"):
+            s.data_bits = 8
         assert s.data_bits == 8
         assert s.byte_size == 8
         assert s.bytesize == 8
@@ -131,17 +133,19 @@ def test_compat_stop_bits(serial_pair: SerialPair) -> None:
         assert s.stop_bits == 1
         assert s.stopbits.value == 1
 
-        s.stop_bits = 2
+        with pytest.warns(DeprecationWarning, match="stop_bits"):
+            s.stop_bits = 2
         assert s.stop_bits == 2
         assert s.stopbits.value == 2
 
     # Not every backend supports 1.5 stop bits, so only store it
     s = Serial()
-    s.stop_bits = 1.5
+    with pytest.warns(DeprecationWarning, match="stop_bits"):
+        s.stop_bits = 1.5
     assert s.stop_bits == 1.5
     assert s.stopbits.value == 1.5
 
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError), pytest.warns(DeprecationWarning):
         s.stop_bits = 3
 
 

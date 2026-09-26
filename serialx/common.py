@@ -819,6 +819,11 @@ class BaseSerial(io.RawIOBase):
     @baudrate.setter
     def baudrate(self, value: int) -> None:
         """Set baud rate (deprecated)."""
+        warnings.warn(
+            "Setting `baudrate` is deprecated, use `reconfigure_port(baudrate=...)`",
+            DeprecationWarning,
+            stacklevel=2,
+        )
         self._update_settings(PortSettingsUpdate(baudrate=value))
 
     @property
@@ -1031,6 +1036,11 @@ class BaseSerial(io.RawIOBase):
     @data_bits.setter
     def data_bits(self, value: int) -> None:
         """Set the byte size (deprecated)."""
+        warnings.warn(
+            "Setting `data_bits` is deprecated, use `reconfigure_port(byte_size=...)`",
+            DeprecationWarning,
+            stacklevel=2,
+        )
         self._update_settings(PortSettingsUpdate(byte_size=value))
 
     @property
@@ -1046,6 +1056,11 @@ class BaseSerial(io.RawIOBase):
     @stop_bits.setter
     def stop_bits(self, value: int | float) -> None:
         """Set the number of stop bits (deprecated)."""
+        warnings.warn(
+            "Setting `stop_bits` is deprecated, use `reconfigure_port(stopbits=...)`",
+            DeprecationWarning,
+            stacklevel=2,
+        )
         self._update_settings(PortSettingsUpdate(stopbits=StopBits(value)))
 
     @property
