@@ -744,11 +744,16 @@ class Win32SerialTransport(BaseSerialTransport):
     def close(self) -> None:
         """Close the transport."""
         self._closing = True
-        if self._internal_transport is not None:
+        if self._internal_transport is None:
+            self._maybe_resolve_closed_waiter()
+        elif self._internal_transport.get_write_buffer_size() > 0:
+            # A graceful close can deadlock if a peer holding CTS never stops. Nothing
+            # sits in a driver buffer so we can drop what was untransmitted, which is
+            # what `CloseHandle` does to pending I/O anyway.
+            self._internal_transport.abort()
+        else:
             # Internal transport closes self._serial via sock.close()
             self._internal_transport.close()
-        else:
-            self._maybe_resolve_closed_waiter()
 
     def abort(self) -> None:
         """Abort the transport immediately."""
