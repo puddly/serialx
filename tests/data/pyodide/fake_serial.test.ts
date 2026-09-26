@@ -46,6 +46,50 @@ test("RTS on one side mirrors to CTS on the other", async () => {
   await a.close();
 });
 
+test("hardware flow control stalls writes until the peer raises RTS", async () => {
+  const [a, b] = createFakeSerialPair();
+  await a.open({ baudRate: 115200, flowControl: "hardware" });
+  await b.open({ baudRate: 115200 });
+  const writer = a.writable!.getWriter();
+  const reader = b.readable!.getReader();
+
+  let written = false;
+  const pending = writer.write(new Uint8Array([1])).then(() => {
+    written = true;
+  });
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  expect(written).toBe(false);
+
+  await b.setSignals({ requestToSend: true });
+  await pending;
+  expect(written).toBe(true);
+  const { value } = await reader.read();
+  expect(Array.from(value!)).toEqual([1]);
+
+  await b.setSignals({ requestToSend: false });
+  const stalled = writer.write(new Uint8Array([2]));
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  writer.releaseLock();
+  await a.close();
+  // Closing settles the stalled write without delivering it
+  await stalled;
+
+  reader.releaseLock();
+  await b.close();
+});
+
+test("no flow control ignores the peer RTS line", async () => {
+  const [a, b] = await openBoth();
+  const writer = a.writable!.getWriter();
+  const reader = b.readable!.getReader();
+  await writer.write(new Uint8Array([5]));
+  const { value } = await reader.read();
+  expect(Array.from(value!)).toEqual([5]);
+  writer.releaseLock();
+  reader.releaseLock();
+  await a.close();
+});
+
 test("DTR mirrors to DSR and DCD on the peer", async () => {
   const [a, b] = await openBoth();
   await a.setSignals({ dataTerminalReady: true });

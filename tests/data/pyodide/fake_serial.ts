@@ -4,6 +4,9 @@
 export class FakeSerialPort {
   #peer: FakeSerialPort | null = null;
   #open = false;
+  #options: SerialOptions | null = null;
+  // Writers stalled on hardware flow control, woken by a peer RTS change or close
+  #ctsWaiters: Array<() => void> = [];
   #readable: ReadableStream<Uint8Array> | null = null;
   #writable: WritableStream<Uint8Array> | null = null;
   #inboundController: ReadableStreamDefaultController<Uint8Array> | null = null;
@@ -26,11 +29,24 @@ export class FakeSerialPort {
     return this.#writable;
   }
 
-  async open(_options: SerialOptions): Promise<void> {
+  #ctsHeld(): boolean {
+    if (this.#options?.flowControl !== "hardware") return false;
+    const peer = this.#peer;
+    return peer === null || !peer.#out.requestToSend;
+  }
+
+  #wakeCtsWaiters(): void {
+    const waiters = this.#ctsWaiters;
+    this.#ctsWaiters = [];
+    for (const wake of waiters) wake();
+  }
+
+  async open(options: SerialOptions): Promise<void> {
     if (this.#open) {
       throw new Error("FakeSerialPort is already open");
     }
     this.#open = true;
+    this.#options = options;
 
     this.#readable = new ReadableStream<Uint8Array>({
       start: (controller) => {
@@ -39,8 +55,12 @@ export class FakeSerialPort {
     });
 
     this.#writable = new WritableStream<Uint8Array>({
-      write: (chunk) => {
+      write: async (chunk) => {
         const bytes = chunk.slice();
+        while (this.#open && this.#ctsHeld()) {
+          await new Promise<void>((resolve) => this.#ctsWaiters.push(resolve));
+        }
+        if (!this.#open) return;
         const peer = this.#peer;
         if (peer && peer.#inboundController) {
           peer.#inboundController.enqueue(bytes);
@@ -62,11 +82,14 @@ export class FakeSerialPort {
 
     this.#readable = null;
     this.#writable = null;
+    this.#options = null;
+    this.#wakeCtsWaiters();
   }
 
   async setSignals(signals: SerialOutputSignals = {}): Promise<void> {
     if ("requestToSend" in signals && signals.requestToSend !== undefined) {
       this.#out.requestToSend = !!signals.requestToSend;
+      if (this.#peer !== null) this.#peer.#wakeCtsWaiters();
     }
     if (
       "dataTerminalReady" in signals &&
