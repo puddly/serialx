@@ -232,6 +232,28 @@ class AsyncSerial:
             dsr=dsr,
         )
 
+    async def reconfigure_port(
+        self,
+        *,
+        baudrate: int | None = None,
+        parity: Parity | str | None = None,
+        stopbits: StopBits | int | float | None = None,
+        byte_size: int | None = None,
+        xonxoff: bool | None = None,
+        rtscts: bool | None = None,
+        dsrdtr: bool | None = None,
+    ) -> None:
+        """Change serial port settings. Only the settings passed are changed."""
+        await self.transport.reconfigure_port(
+            baudrate=baudrate,
+            parity=parity,
+            stopbits=stopbits,
+            byte_size=byte_size,
+            xonxoff=xonxoff,
+            rtscts=rtscts,
+            dsrdtr=dsrdtr,
+        )
+
     # ---- Settings (proxy to transport) ----
 
     @property

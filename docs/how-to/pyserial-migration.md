@@ -70,6 +70,9 @@ are listed in the [main API documentation](../api.md). The most common ones are 
 | `Serial(do_not_open=False)` | —                          | Not supported; open explicitly via `open()`  |
 | `Serial(rtsdtr_on_open=X)`  | `dtr_on_open=X, rts_on_open=X`   | Now controlled per-pin                  |
 | `Serial(rtsdtr_on_close=X)` | `dtr_on_close=X, rts_on_close=X` | Now controlled per-pin                  |
+| `baudrate = X`              | `reconfigure_port(baudrate=X)` | Setters are deprecated                   |
+| `stop_bits = X`             | `reconfigure_port(stopbits=X)` | Setters are deprecated                   |
+| `data_bits = X`             | `reconfigure_port(byte_size=X)` | Setters are deprecated                  |
 | `SerialPortInfo[i]`         | attribute access           | Slicing `SerialPortInfo` is deprecated       |
 | `SerialPortInfo.description`| `SerialPortInfo.product`   |                                              |
 
@@ -86,6 +89,15 @@ with serialx.serial_for_url("/dev/ttyUSB0", baudrate=115200) as serial:
 ```
 
 There is no equivalent for async code because the default `create_serial_connection` and `open_serial_connection` functions already transparently accept URIs.
+
+### Changing port settings
+Use `reconfigure_port(...)` instead of assigning to `baudrate` and other setting properties. Only the settings passed are changed:
+
+```diff
+-serial.baudrate = 9600
+-serial.parity = serial.PARITY_EVEN
++serial.reconfigure_port(baudrate=9600, parity=serialx.Parity.EVEN)
+```
 
 ## Constants
 pyserial exposes parity, stop bit, and byte size settings as module-level constants (`serial.PARITY_NONE`, `serial.STOPBITS_ONE`, etc.). serialx replaces them with the `Parity` and `StopBits` enums. Properties like `serial.parity` and `serial.stopbits` now return enum members instead of raw strings or numbers.
@@ -147,6 +159,14 @@ if pins.cts is serialx.PinState.HIGH:
 :::
 
 `set_modem_pins` accepts individual pin kwargs or a full `ModemPins` dataclass. Pins omitted from the call are left unchanged. `get_modem_pins` returns a `ModemPins` dataclass of `PinState` enum values, call `.to_bool()` on a pin for a `bool | None`.
+
+### Changing port settings
+Assigning to `transport.serial.baudrate` reconfigures the port on the event loop, which is blocking IO. Use the async method on the transport instead:
+
+```diff
+-transport.serial.baudrate = 9600
++await transport.reconfigure_port(baudrate=9600)
+```
 
 ### Simplified async API
 If you have existing sync code using `serial_for_url` and want to make it async, use `async_serial_for_url`. The method names match the sync API (e.g. `read`, `readexactly`, `readline`, `readuntil`, `write`, `flush`) so the migration is mostly adding `async`/`await`:

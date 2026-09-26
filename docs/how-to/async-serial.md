@@ -85,6 +85,14 @@ pins = await serial.get_modem_pins()
 assert pins.rts is serialx.PinState.HIGH
 ```
 
+### Reconfiguring
+`reconfigure_port` changes settings on the open port. Only the settings passed are
+changed:
+
+```python
+await serial.reconfigure_port(baudrate=9600, parity=serialx.Parity.EVEN)
+```
+
 ## Async protocols and transports
 While the high-level async API is useful for simple code, libraries and other
 high-performance uses should use asyncio transports and protocols. These have the

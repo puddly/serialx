@@ -65,3 +65,17 @@ transport, protocol = await serialx.create_serial_connection(
     baudrate=115200,
 )
 ```
+
+## Reconfiguring a port
+`reconfigure_port` changes settings on an open port. Only the settings passed are changed:
+
+```python
+serial.reconfigure_port(baudrate=9600, parity=serialx.Parity.EVEN)
+```
+
+The async APIs expose the same method as a coroutine:
+
+```python
+await serial.reconfigure_port(baudrate=9600)
+await transport.reconfigure_port(baudrate=9600)
+```
