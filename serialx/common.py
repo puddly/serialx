@@ -633,7 +633,24 @@ class BaseSerial(io.RawIOBase):
         if update.dsrdtr is not None:
             self._dsrdtr = update.dsrdtr
 
-    def _update_settings(self, update: PortSettingsUpdate) -> None:
+    def _set_deprecated(
+        self, name: str, kwarg: str, update: PortSettingsUpdate
+    ) -> None:
+        """Apply a deprecated property setter, warning about the replacement."""
+        if self.is_open:
+            warnings.warn(
+                f"Setting `{name}` is deprecated, use `reconfigure_port({kwarg}=...)`",
+                DeprecationWarning,
+                stacklevel=3,
+            )
+        else:
+            warnings.warn(
+                f"Setting `{name}` on a closed port is deprecated, pass `{kwarg}` to"
+                " the constructor instead",
+                DeprecationWarning,
+                stacklevel=3,
+            )
+
         self._store_settings_update(update)
 
         if self.is_open:
@@ -651,22 +668,23 @@ class BaseSerial(io.RawIOBase):
         rtscts: bool | None = None,
         dsrdtr: bool | None = None,
     ) -> None:
-        """Change serial port settings.
-
-        Only the settings passed are changed. If the port is closed, they take
-        effect on open.
-        """
-        self._update_settings(
-            PortSettingsUpdate(
-                baudrate=baudrate,
-                parity=None if parity is None else Parity(parity),
-                stopbits=None if stopbits is None else StopBits(stopbits),
-                byte_size=byte_size,
-                xonxoff=xonxoff,
-                rtscts=rtscts,
-                dsrdtr=dsrdtr,
+        """Change settings on the open port. Only the settings passed are changed."""
+        if not self.is_open:
+            raise SerialException(
+                "Cannot reconfigure a closed port, pass settings to the constructor"
             )
+
+        update = PortSettingsUpdate(
+            baudrate=baudrate,
+            parity=None if parity is None else Parity(parity),
+            stopbits=None if stopbits is None else StopBits(stopbits),
+            byte_size=byte_size,
+            xonxoff=xonxoff,
+            rtscts=rtscts,
+            dsrdtr=dsrdtr,
         )
+        self._store_settings_update(update)
+        self._reconfigure_port(update)
 
     @abstractmethod
     def _reconfigure_port(self, update: PortSettingsUpdate) -> None:
@@ -819,12 +837,9 @@ class BaseSerial(io.RawIOBase):
     @baudrate.setter
     def baudrate(self, value: int) -> None:
         """Set baud rate (deprecated)."""
-        warnings.warn(
-            "Setting `baudrate` is deprecated, use `reconfigure_port(baudrate=...)`",
-            DeprecationWarning,
-            stacklevel=2,
+        self._set_deprecated(
+            name="baudrate", kwarg="baudrate", update=PortSettingsUpdate(baudrate=value)
         )
-        self._update_settings(PortSettingsUpdate(baudrate=value))
 
     @property
     def parity(self) -> Parity:
@@ -1036,12 +1051,11 @@ class BaseSerial(io.RawIOBase):
     @data_bits.setter
     def data_bits(self, value: int) -> None:
         """Set the byte size (deprecated)."""
-        warnings.warn(
-            "Setting `data_bits` is deprecated, use `reconfigure_port(byte_size=...)`",
-            DeprecationWarning,
-            stacklevel=2,
+        self._set_deprecated(
+            name="data_bits",
+            kwarg="byte_size",
+            update=PortSettingsUpdate(byte_size=value),
         )
-        self._update_settings(PortSettingsUpdate(byte_size=value))
 
     @property
     def stop_bits(self) -> int | float:
@@ -1056,12 +1070,11 @@ class BaseSerial(io.RawIOBase):
     @stop_bits.setter
     def stop_bits(self, value: int | float) -> None:
         """Set the number of stop bits (deprecated)."""
-        warnings.warn(
-            "Setting `stop_bits` is deprecated, use `reconfigure_port(stopbits=...)`",
-            DeprecationWarning,
-            stacklevel=2,
+        self._set_deprecated(
+            name="stop_bits",
+            kwarg="stopbits",
+            update=PortSettingsUpdate(stopbits=StopBits(value)),
         )
-        self._update_settings(PortSettingsUpdate(stopbits=StopBits(value)))
 
     @property
     def writeTimeout(self) -> float | None:

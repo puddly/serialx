@@ -99,6 +99,16 @@ Use `reconfigure_port(...)` instead of assigning to `baudrate` and other setting
 +serial.reconfigure_port(baudrate=9600, parity=serialx.Parity.EVEN)
 ```
 
+Configuring an unopened port through its properties is deprecated. Pass settings to the `serialx.serial_for_url` constructor:
+
+```diff
+-serial = serial.Serial()
+-serial.baudrate = 9600
+-serial.open()
++serial = serialx.serial_for_url("/dev/ttyUSB0", baudrate=9600)
++serial.open()
+```
+
 ## Constants
 pyserial exposes parity, stop bit, and byte size settings as module-level constants (`serial.PARITY_NONE`, `serial.STOPBITS_ONE`, etc.). serialx replaces them with the `Parity` and `StopBits` enums. Properties like `serial.parity` and `serial.stopbits` now return enum members instead of raw strings or numbers.
 

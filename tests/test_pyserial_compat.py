@@ -27,6 +27,7 @@ from serialx import (
     Parity,
     PinState,
     Serial,
+    SerialException,
     SerialPortInfo,
 )
 from serialx.tools.list_ports import comports, grep
@@ -140,13 +141,20 @@ def test_compat_stop_bits(serial_pair: SerialPair) -> None:
 
     # Not every backend supports 1.5 stop bits, so only store it
     s = Serial()
-    with pytest.warns(DeprecationWarning, match="stop_bits"):
+    with pytest.warns(DeprecationWarning, match="closed port"):
         s.stop_bits = 1.5
     assert s.stop_bits == 1.5
     assert s.stopbits.value == 1.5
 
-    with pytest.raises(ValueError), pytest.warns(DeprecationWarning):
+    with pytest.raises(ValueError):
         s.stop_bits = 3
+
+
+def test_reconfigure_port_closed_raises() -> None:
+    """Settings for a closed port belong in the constructor."""
+    s = Serial()
+    with pytest.raises(SerialException, match="closed port"):
+        s.reconfigure_port(baudrate=115200)
 
 
 def test_compat_no_arg_construction() -> None:
