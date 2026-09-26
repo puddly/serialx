@@ -524,7 +524,9 @@ class PosixSerialTransport(DescriptorTransport):
 
         await asyncio.sleep(AFTER_OPEN_DELAY)
 
-        await self._loop.run_in_executor(None, self._serial.configure_port)
+        await self._loop.run_in_executor(
+            None, self._serial._reconfigure_port, self._serial._all_settings()
+        )
 
         if self.is_closing():
             # If we are closing, we should not call `connection_made`

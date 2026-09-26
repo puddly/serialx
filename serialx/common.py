@@ -594,11 +594,6 @@ class BaseSerial(io.RawIOBase):
             self.close()
             raise
 
-    @maybe_wrap_exceptions
-    def configure_port(self) -> None:
-        """Apply every current setting to the serial port."""
-        self._reconfigure_port(self._all_settings())
-
     @abstractmethod
     def _open(self) -> None:
         """Open the serial port (platform-specific)."""

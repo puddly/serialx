@@ -656,7 +656,9 @@ class Win32SerialTransport(BaseSerialTransport):
             self._extra["serial"] = self._serial
 
             await self._loop.run_in_executor(None, self._serial._setup_comm)
-            await self._loop.run_in_executor(None, self._serial.configure_port)
+            await self._loop.run_in_executor(
+                None, self._serial._reconfigure_port, self._serial._all_settings()
+            )
 
             if self._closing:
                 await self._loop.run_in_executor(None, self._serial.close)  # type: ignore[unreachable]
