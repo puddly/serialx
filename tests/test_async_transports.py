@@ -467,22 +467,26 @@ async def test_async_reconfigure_flow_control(serial_pair: SerialPair) -> None:
 @pytest.mark.skip_quirks(SerialQuirk.NO_RTS_CTS, SerialQuirk.NO_PAUSE_WRITING_CALLBACKS)
 async def test_async_reconfigure_rtscts_holds_writes(serial_pair: SerialPair) -> None:
     """Test that enabling RTS/CTS on an open port makes a held CTS line stall writes."""
-    async with serialx.async_serial_for_url(serial_pair.right, baudrate=9600) as right:
+    async with serialx.async_serial_for_url(
+        serial_pair.right, baudrate=115200
+    ) as right:
         await right.set_modem_pins(rts=False)
         await asyncio.sleep(serial_pair.modem_line_propagation_delay)
 
         # `close()` drains, so bound it or it waits on CTS forever
         async with serialx.async_serial_for_url(
-            serial_pair.left, baudrate=9600, close_timeout=0.5
+            serial_pair.left, baudrate=115200, close_timeout=0.5
         ) as left:
             async with asyncio_timeout(1):
                 await left.write(b"x" * 1024)
+                await left.flush()
 
             await left.reconfigure_port(rtscts=True)
 
             with pytest.raises(TimeoutError):
                 async with asyncio_timeout(0.5):
                     await left.write(b"x" * 1024)
+                    await left.flush()
 
 
 # --- Lifecycle ---

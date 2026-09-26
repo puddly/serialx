@@ -319,7 +319,7 @@ async def test_lifecycle_close_drains_pending_writes(
     receiver_proto.assert_clean()
 
 
-@pytest.mark.skip_quirks(SerialQuirk.NO_RTS_CTS)
+@pytest.mark.skip_quirks(SerialQuirk.NO_RTS_CTS, SerialQuirk.NO_WRITE_BUFFERING)
 async def test_lifecycle_close_timeout_aborts_stalled_drain(
     serial_pair: SerialPair,
 ) -> None:
@@ -362,6 +362,7 @@ async def test_lifecycle_close_timeout_aborts_stalled_drain(
     receiver_proto.assert_clean()
 
 
+@pytest.mark.skip_quirks(SerialQuirk.NO_WRITE_BUFFERING)
 async def test_lifecycle_abort_during_drain_escalates(
     serial_pair: SerialPair,
 ) -> None:
@@ -380,9 +381,6 @@ async def test_lifecycle_abort_during_drain_escalates(
     try:
         # Large payload to overflow the kernel TTY buffer and force user-space buffering.
         sender.write(b"\x55" * (4 * 1024 * 1024))
-
-        if sender.get_write_buffer_size() == 0:
-            pytest.skip("Backend absorbed the entire write synchronously")
 
         # close() starts a drain because buffer is non-empty.
         sender.close()

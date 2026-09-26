@@ -456,12 +456,12 @@ def test_sync_reconfigure_flow_control(serial_pair: SerialPair) -> None:
 @pytest.mark.skip_quirks(SerialQuirk.NO_RTS_CTS, SerialQuirk.NO_WRITE_TIMEOUT)
 def test_sync_reconfigure_rtscts_holds_writes(serial_pair: SerialPair) -> None:
     """Test that enabling RTS/CTS on an open port makes a held CTS line stall writes."""
-    with Serial.from_url(serial_pair.right, baudrate=9600) as right:
+    with Serial.from_url(serial_pair.right, baudrate=115200) as right:
         right.set_modem_pins(rts=False)
         time.sleep(serial_pair.modem_line_propagation_delay)
 
         with Serial.from_url(
-            serial_pair.left, baudrate=9600, write_timeout=0.5
+            serial_pair.left, baudrate=115200, write_timeout=0.5
         ) as left:
             left.write(b"x" * 1024)
 
