@@ -135,12 +135,14 @@ def test_compat_stop_bits(serial_pair: SerialPair) -> None:
         assert s.stop_bits == 2
         assert s.stopbits.value == 2
 
-        s.stop_bits = 1.5
-        assert s.stop_bits == 1.5
-        assert s.stopbits.value == 1.5
+    # Not every backend supports 1.5 stop bits, so only store it
+    s = Serial()
+    s.stop_bits = 1.5
+    assert s.stop_bits == 1.5
+    assert s.stopbits.value == 1.5
 
-        with pytest.raises(ValueError):
-            s.stop_bits = 3
+    with pytest.raises(ValueError):
+        s.stop_bits = 3
 
 
 def test_compat_no_arg_construction() -> None:

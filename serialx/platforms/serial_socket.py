@@ -24,6 +24,7 @@ from serialx.common import (
     BaseSerialTransport,
     ModemPins,
     Parity,
+    PortSettingsUpdate,
     StopBits,
     register_uri_handler,
 )
@@ -110,7 +111,7 @@ class SocketSerial(BaseSerial):
 
         return effective
 
-    def _configure_port(self) -> None:
+    def _reconfigure_port(self, update: PortSettingsUpdate) -> None:
         """Configure the serial port settings."""
         if self._socket is not None:
             self._socket.settimeout(self._get_effective_socket_timeout())
@@ -381,6 +382,9 @@ class SocketSerialTransport(BaseSerialTransport):
             if self._tcp_transport is not None
             else False
         )
+
+    async def _reconfigure_port(self, update: PortSettingsUpdate) -> None:
+        pass
 
 
 register_uri_handler(

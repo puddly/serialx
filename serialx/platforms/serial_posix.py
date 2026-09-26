@@ -26,6 +26,7 @@ from ..common import (
     ModemPins,
     Parity,
     PinState,
+    PortSettingsUpdate,
     StopBits,
     UnsupportedSetting,
     register_uri_handler,
@@ -277,8 +278,9 @@ class PosixSerial(BaseSerial):
     def _after_configure_port(self) -> None:
         pass
 
-    def _configure_port(self) -> None:
+    def _reconfigure_port(self, update: PortSettingsUpdate) -> None:
         """Configure the serial port settings."""
+        # termios applies the whole struct at once, so rebuild it from `self._*`
         LOGGER.debug("Configuring serial port %r", self._path)
 
         if self._fileno is None:
@@ -555,6 +557,10 @@ class PosixSerialTransport(DescriptorTransport):
         """Set modem control bits, internal."""
         assert self._serial is not None
         await self._loop.run_in_executor(None, self._serial.set_modem_pins, modem_pins)
+
+    async def _reconfigure_port(self, update: PortSettingsUpdate) -> None:
+        assert self._serial is not None
+        await self._loop.run_in_executor(None, self._serial._reconfigure_port, update)
 
 
 register_uri_handler(

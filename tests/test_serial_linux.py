@@ -18,6 +18,7 @@ import threading
 from typing import Any
 from unittest.mock import ANY, call, patch
 
+from serialx.common import PortSettingsUpdate
 from serialx.platforms.serial_linux import (
     CBAUD,
     CBAUDEX,
@@ -153,12 +154,12 @@ async def test_async_linux_race_condition_connect_close() -> None:
     resume_configuring = threading.Event()
 
     class SlowConfigureSerial(LinuxSerial):
-        def _configure_port(self) -> None:
+        def _reconfigure_port(self, update: PortSettingsUpdate) -> None:
             started_configuring.set()
             if not resume_configuring.wait(timeout=5.0):
                 raise RuntimeError("Timeout waiting for resume signal")
 
-            super()._configure_port()
+            super()._reconfigure_port(update)
 
     class TestTransport(LinuxSerialTransport):
         _serial_cls = SlowConfigureSerial

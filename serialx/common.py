@@ -416,6 +416,19 @@ def maybe_wrap_exceptions(
     return replacement
 
 
+@dataclasses.dataclass(frozen=True)
+class PortSettingsUpdate:
+    """Settings to apply to a serial port. `None` fields are left untouched."""
+
+    baudrate: int | None = None
+    parity: Parity | None = None
+    stopbits: StopBits | None = None
+    byte_size: int | None = None
+    xonxoff: bool | None = None
+    rtscts: bool | None = None
+    dsrdtr: bool | None = None
+
+
 class BaseSerial(io.RawIOBase):
     """Base class for serial port communication.
 
@@ -576,24 +589,97 @@ class BaseSerial(io.RawIOBase):
         self._broken = None
         try:
             self._open()
-            self._configure_port()
+            self._reconfigure_port(self._all_settings())
         except BaseException:
             self.close()
             raise
 
     @maybe_wrap_exceptions
     def configure_port(self) -> None:
-        """Configure the serial port settings."""
-        self._configure_port()
+        """Apply every current setting to the serial port."""
+        self._reconfigure_port(self._all_settings())
 
     @abstractmethod
     def _open(self) -> None:
         """Open the serial port (platform-specific)."""
         raise NotImplementedError
 
+    def _all_settings(self) -> PortSettingsUpdate:
+        return PortSettingsUpdate(
+            baudrate=self._baudrate,
+            parity=self._parity,
+            stopbits=self._stopbits,
+            byte_size=self._byte_size,
+            xonxoff=self._xonxoff,
+            rtscts=self._rtscts,
+            dsrdtr=self._dsrdtr,
+        )
+
+    def _store_settings_update(self, update: PortSettingsUpdate) -> None:
+        """Record the update as current settings, without touching the port."""
+        if update.baudrate is not None:
+            self._baudrate = update.baudrate
+
+        if update.parity is not None:
+            self._parity = update.parity
+
+        if update.stopbits is not None:
+            self._stopbits = update.stopbits
+
+        if update.byte_size is not None:
+            self._byte_size = update.byte_size
+
+        if update.xonxoff is not None:
+            self._xonxoff = update.xonxoff
+
+        if update.rtscts is not None:
+            self._rtscts = update.rtscts
+
+        if update.dsrdtr is not None:
+            self._dsrdtr = update.dsrdtr
+
+    def _update_settings(self, update: PortSettingsUpdate) -> None:
+        self._store_settings_update(update)
+
+        if self.is_open:
+            self._reconfigure_port(update)
+
+    @maybe_wrap_exceptions
+    def reconfigure_port(
+        self,
+        *,
+        baudrate: int | None = None,
+        parity: Parity | str | None = None,
+        stopbits: StopBits | int | float | None = None,
+        byte_size: int | None = None,
+        xonxoff: bool | None = None,
+        rtscts: bool | None = None,
+        dsrdtr: bool | None = None,
+    ) -> None:
+        """Change serial port settings.
+
+        Only the settings passed are changed. If the port is closed, they take
+        effect on open.
+        """
+        self._update_settings(
+            PortSettingsUpdate(
+                baudrate=baudrate,
+                parity=None if parity is None else Parity(parity),
+                stopbits=None if stopbits is None else StopBits(stopbits),
+                byte_size=byte_size,
+                xonxoff=xonxoff,
+                rtscts=rtscts,
+                dsrdtr=dsrdtr,
+            )
+        )
+
     @abstractmethod
-    def _configure_port(self) -> None:
-        """Configure the serial port settings (platform-specific)."""
+    def _reconfigure_port(self, update: PortSettingsUpdate) -> None:
+        """Apply a settings update to the open port (platform-specific).
+
+        Drivers that can only apply all settings at once rebuild them from
+        `self._*`, which already reflect the update.
+        """
         raise NotImplementedError
 
     @maybe_wrap_exceptions
@@ -738,8 +824,7 @@ class BaseSerial(io.RawIOBase):
     @baudrate.setter
     def baudrate(self, value: int) -> None:
         """Set baud rate (deprecated)."""
-        self._baudrate = value
-        self._configure_port()
+        self._update_settings(PortSettingsUpdate(baudrate=value))
 
     @property
     def parity(self) -> Parity:
@@ -951,7 +1036,7 @@ class BaseSerial(io.RawIOBase):
     @data_bits.setter
     def data_bits(self, value: int) -> None:
         """Set the byte size (deprecated)."""
-        self._byte_size = value
+        self._update_settings(PortSettingsUpdate(byte_size=value))
 
     @property
     def stop_bits(self) -> int | float:
@@ -966,7 +1051,7 @@ class BaseSerial(io.RawIOBase):
     @stop_bits.setter
     def stop_bits(self, value: int | float) -> None:
         """Set the number of stop bits (deprecated)."""
-        self._stopbits = StopBits(value)
+        self._update_settings(PortSettingsUpdate(stopbits=StopBits(value)))
 
     @property
     def writeTimeout(self) -> float | None:
@@ -1303,6 +1388,35 @@ class BaseSerialTransport(asyncio.Transport):
     async def wait_closed(self) -> None:
         """Wait until transport is fully closed."""
         await self._closed_waiter
+
+    async def reconfigure_port(
+        self,
+        *,
+        baudrate: int | None = None,
+        parity: Parity | str | None = None,
+        stopbits: StopBits | int | float | None = None,
+        byte_size: int | None = None,
+        xonxoff: bool | None = None,
+        rtscts: bool | None = None,
+        dsrdtr: bool | None = None,
+    ) -> None:
+        """Change serial port settings. Only the settings passed are changed."""
+        assert self._serial is not None
+        update = PortSettingsUpdate(
+            baudrate=baudrate,
+            parity=None if parity is None else Parity(parity),
+            stopbits=None if stopbits is None else StopBits(stopbits),
+            byte_size=byte_size,
+            xonxoff=xonxoff,
+            rtscts=rtscts,
+            dsrdtr=dsrdtr,
+        )
+        self._serial._store_settings_update(update)
+        await self._reconfigure_port(update)
+
+    @abstractmethod
+    async def _reconfigure_port(self, update: PortSettingsUpdate) -> None:
+        raise NotImplementedError
 
 
 def get_serial_classes(

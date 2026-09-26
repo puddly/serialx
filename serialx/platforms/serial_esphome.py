@@ -59,6 +59,7 @@ from serialx.common import (
     ModemPins,
     Parity,
     PinState,
+    PortSettingsUpdate,
     SerialPortInfo,
     StopBits,
     register_uri_handler,
@@ -195,12 +196,6 @@ class ESPHomeSerial(BaseSerial):
 
         """
         super().__init__(*args, **kwargs)
-
-        if self._parity not in PARITY_MAP:
-            raise UnsupportedSetting(f"Unsupported parity: {self._parity}")
-
-        if self._stopbits not in STOP_BITS_MAP:
-            raise UnsupportedSetting(f"Unsupported stop bits: {self._stopbits}")
 
         if key and noise_psk:
             raise ValueError("Both `key` and `noise_psk` cannot be provided")
@@ -537,13 +532,20 @@ class ESPHomeSerial(BaseSerial):
 
         self._instance_subscribed = False
 
-    def _configure_port(self) -> None:
+    def _reconfigure_port(self, update: PortSettingsUpdate) -> None:
         """Configure the serial port settings."""
         self._call_on_loop(self._async_configure_port())
 
     @translate_esphome_errors
     async def _async_configure_port(self) -> None:
         """Configure the serial port settings."""
+        # The configure message carries every setting, so send them all
+        if self._parity not in PARITY_MAP:
+            raise UnsupportedSetting(f"Unsupported parity: {self._parity}")
+
+        if self._stopbits not in STOP_BITS_MAP:
+            raise UnsupportedSetting(f"Unsupported stop bits: {self._stopbits}")
+
         assert self._api is not None
         await self._resolve_instance_id()
         assert self._instance_id is not None
@@ -931,6 +933,10 @@ class ESPHomeSerialTransport(BaseSerialTransport):
     def get_write_buffer_size(self) -> int:
         """Get the number of bytes currently in the write buffer."""
         return 0
+
+    async def _reconfigure_port(self, update: PortSettingsUpdate) -> None:
+        assert self._serial is not None
+        await self._serial._async_configure_port()
 
 
 def esphome_list_serial_ports(*args: Any, **kwargs: Any) -> list[SerialPortInfo]:

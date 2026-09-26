@@ -34,6 +34,7 @@ from ...common import (
     ModemPins,
     Parity,
     PinState,
+    PortSettingsUpdate,
     SerialException,
     StopBits,
     UnsupportedSetting,
@@ -89,7 +90,7 @@ class PyodideSerial(BaseSerial):
     def _open(self) -> None:
         raise NotImplementedError()
 
-    def _configure_port(self) -> None:
+    def _reconfigure_port(self, update: PortSettingsUpdate) -> None:
         raise NotImplementedError()
 
     def _close(self) -> None:
