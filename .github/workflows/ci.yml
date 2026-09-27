@@ -360,7 +360,8 @@ jobs:
             --cov=serialx \
             -o console_output_style=count \
             -p no:sugar \
-            --adapter-pair /dev/tnt0,/dev/tnt1,no-rts-cts,no-dtr-dsr,no-num-unwritten-bytes,no-reset-write-buffer,no-write-timeout,no-buffer-control,no-write-buffering \
+            --adapter-pair "$(sed -n 1p ports.txt),$(sed -n 2p ports.txt),no-reset-write-buffer" \
+            -k "not cts_held and not rtscts_holds_writes" \
             tests
       - name: Show emulator and kernel logs
         if: failure()
