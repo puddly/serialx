@@ -83,7 +83,7 @@ def pytest_addoption(parser: pytest.Parser) -> None:
         default=[],
         help=(
             "Pair of serial endpoints in format LEFT,RIGHT[,FLAG...] "
-            "(e.g. /dev/tnt0,/dev/tnt1,no-pin-readback,no-rts-cts "
+            "(e.g. /dev/ttyUSB0,/dev/ttyUSB1,no-rts-cts "
             "or rfc2217://127.0.0.1:5001,"
             "rfc2217://127.0.0.1:5002,no-write-timeout)"
         ),

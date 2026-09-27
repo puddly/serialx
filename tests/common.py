@@ -5,9 +5,7 @@ from collections.abc import AsyncIterator, Callable, Iterator
 import contextlib
 import dataclasses
 import enum
-import errno
 import json
-import logging
 import os
 from pathlib import Path
 import shutil
@@ -67,11 +65,9 @@ class SerialQuirk(str, enum.Enum):
     NO_DTR_DSR = "no-dtr-dsr"
     NO_RTS_DTR_READBACK = "no-rts-dtr-readback"
     NO_NUM_UNREAD_BYTES = "no-num-unread-bytes"
-    NO_NUM_UNWRITTEN_BYTES = "no-num-unwritten-bytes"
     NO_RESET_WRITE_BUFFER = "no-reset-write-buffer"
     NO_RESET_READ_BUFFER = "no-reset-read-buffer"
     NO_WRITE_TIMEOUT = "no-write-timeout"
-    NO_WRITE_LIMITS = "no-write-limits"
     NO_BUFFER_CONTROL = "no-buffer-control"
     NO_PAUSE_WRITING_CALLBACKS = "no-pause-writing-callbacks"
     NO_EXCLUSIVITY = "no-exclusivity"
@@ -146,12 +142,10 @@ SERIAL_PAIR_DEFAULT_QUIRKS: dict[SerialBackend, frozenset[SerialQuirk]] = {
             # don't read back on the same port.
             SerialQuirk.NO_RTS_DTR_READBACK,
             SerialQuirk.NO_NUM_UNREAD_BYTES,
-            SerialQuirk.NO_NUM_UNWRITTEN_BYTES,
             SerialQuirk.NO_RESET_READ_BUFFER,
             SerialQuirk.NO_RESET_WRITE_BUFFER,
             SerialQuirk.NO_PAUSE_WRITING_CALLBACKS,
             SerialQuirk.NO_BUFFER_CONTROL,
-            SerialQuirk.NO_WRITE_LIMITS,
             SerialQuirk.NO_EXCLUSIVITY,
         }
     ),
@@ -306,44 +300,6 @@ def create_adapter_pair(left: str, right: str) -> Iterator[tuple[str, str]]:
                 time.sleep(0.05)
 
         yield (left, right)
-    elif left.startswith("/dev/tnt") or right.startswith("/dev/tnt"):
-        try:
-            yield (left, right)
-        finally:
-            for path in (left, right):
-                try:
-                    fd = os.open(path, os.O_RDWR | os.O_NOCTTY | os.O_NONBLOCK)
-                except OSError as exc:  # noqa: PERF203
-                    if exc.errno != errno.EBUSY:
-                        continue
-
-                    logger = logging.getLogger(__name__)
-                    logger.warning("tty0tty %s is EBUSY after teardown", path)
-
-                    # Who has this device open?
-                    for proc in psutil.process_iter(["pid", "name", "cmdline"]):
-                        try:
-                            for f in proc.open_files():
-                                if f.path == path:
-                                    logger.warning(
-                                        "  PID %d (%s) fd=%d: %s",
-                                        proc.pid,
-                                        proc.info["name"],
-                                        f.fd,
-                                        proc.info["cmdline"],
-                                    )
-                        except (  # noqa: PERF203
-                            psutil.NoSuchProcess,
-                            psutil.AccessDenied,
-                        ):
-                            pass
-
-                    # Check our own process
-                    for f in psutil.Process().open_files():
-                        if "/dev/tnt" in f.path:
-                            logger.warning("  SELF fd=%d: %s", f.fd, f.path)
-                else:
-                    os.close(fd)
     else:
         yield (left, right)
 
