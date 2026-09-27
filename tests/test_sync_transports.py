@@ -782,6 +782,17 @@ def test_sync_zero_timeout_returns_buffered_data(serial_pair: SerialPair) -> Non
         assert elapsed() < 0.05
 
 
+def test_sync_zero_timeout_no_data(serial_pair: SerialPair) -> None:
+    """Reading with `timeout=0` and nothing buffered should return nothing immediately."""
+    with Serial.from_url(serial_pair.right, baudrate=115200) as right:
+        buf = bytearray(4096)
+        with measure_time() as elapsed:
+            n = right.readinto(buf, timeout=0)
+
+        assert n == 0
+        assert elapsed() < 0.05
+
+
 def test_sync_buffered_bytes_recovered_after_short_timeout(
     serial_pair: SerialPair,
 ) -> None:
