@@ -428,9 +428,13 @@ def test_sync_rtscts_setting(serial_pair: SerialPair, rtscts: bool) -> None:
         pytest.xfail("ESPHome host does not support RTS/CTS flow control")
 
     # Open both sides: on com0com, opening right asserts DTR which raises CTS on left
-    with Serial.from_url(serial_pair.right, baudrate=115200):
+    with Serial.from_url(serial_pair.right, baudrate=115200) as right:
         with Serial.from_url(serial_pair.left, baudrate=115200, rtscts=rtscts) as left:
             left.write(b"test")
+
+            # ser2net closes both sides concurrently, so data still in flight when the
+            # right side drops RTS stays held by CTS until `closing_wait` expires
+            assert right.readexactly(4) == b"test"
 
 
 def test_sync_reconfigure_flow_control(serial_pair: SerialPair) -> None:
