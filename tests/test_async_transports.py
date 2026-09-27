@@ -436,11 +436,17 @@ async def test_async_rtscts_setting(serial_pair: SerialPair, rtscts: bool) -> No
     if rtscts and SerialBackend.ESPHOME_HOST in serial_pair.backends:
         pytest.xfail("ESPHome host does not support RTS/CTS flow control")
 
-    async with serialx.async_serial_for_url(serial_pair.right, baudrate=115200):
+    async with serialx.async_serial_for_url(
+        serial_pair.right, baudrate=115200
+    ) as right:
         async with serialx.async_serial_for_url(
             serial_pair.left, baudrate=115200, rtscts=rtscts
         ) as left:
             left.write_nowait(b"test")
+
+            # ser2net closes both sides concurrently, so data still in flight when the
+            # right side drops RTS stays held by CTS until `closing_wait` expires
+            assert await right.readexactly(4) == b"test"
 
 
 async def test_async_reconfigure_flow_control(serial_pair: SerialPair) -> None:
