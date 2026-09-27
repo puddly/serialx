@@ -629,14 +629,11 @@ class RFC2217Serial(SocketSerial):
         # we need to loop until it actually produces some, or we hit the timeout limit
         remaining_timeout = timeout
         while True:
-            if remaining_timeout is not None and remaining_timeout <= 0:
-                return 0
-
             with measure_time() as get_elapsed:
                 try:
                     with self._socket_timeout(remaining_timeout):
                         n = self._socket.recv_into(buf)
-                except TimeoutError:
+                except (TimeoutError, BlockingIOError):
                     return 0
 
             if remaining_timeout is not None:
@@ -660,6 +657,9 @@ class RFC2217Serial(SocketSerial):
             n = self._drain_data_buffer(m)
             if n:
                 return n
+
+            if remaining_timeout is not None and remaining_timeout <= 0:
+                return 0
 
     def _set_modem_pins(self, modem_pins: ModemPins) -> None:
         """Set DTR/RTS via SET_CONTROL commands."""
