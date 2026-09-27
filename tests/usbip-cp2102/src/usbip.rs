@@ -126,11 +126,12 @@ impl Server {
     /// controller would, instead of once per byte.
     async fn tick(self: Arc<Self>) {
         loop {
-            let now = self.now();
-            let next = {
+            // Read the clock under the lock: `submit` may advance the wires too
+            let (now, next) = {
                 let mut sim = self.sim.lock().unwrap();
+                let now = self.now();
                 sim.step(now);
-                sim.next_wakeup(now)
+                (now, sim.next_wakeup(now))
             };
             let frame = (FRAME_NS as f64 * self.time_scale) as u64;
             match next {
@@ -224,7 +225,10 @@ impl Server {
                         setup: hdr[40..48].try_into().unwrap(),
                         data,
                     };
-                    self.sim.lock().unwrap().submit(dev, urb);
+                    let mut sim = self.sim.lock().unwrap();
+                    sim.advance(self.now());
+                    sim.submit(dev, urb);
+                    drop(sim);
                     self.notify.notify_one();
                 }
                 CMD_UNLINK => {

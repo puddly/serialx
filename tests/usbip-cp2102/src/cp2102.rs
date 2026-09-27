@@ -209,6 +209,27 @@ impl Chip {
         self.rx.extend(encoded);
     }
 
+    /// Moves bulk OUT packets into the transmit buffer while it has room.
+    fn fill_tx(&mut self) {
+        while let Some(pending) = self.pending_out.front_mut() {
+            let room = TX_BUF - self.tx.len() - self.inflight.len();
+            let packet = (pending.data.len() - pending.done).min(MAX_PACKET);
+            if room < packet {
+                break;
+            }
+            self.tx
+                .extend(&pending.data[pending.done..pending.done + packet]);
+            pending.done += packet;
+            if pending.done == pending.data.len() {
+                let seqnum = pending.seqnum;
+                let len = pending.data.len();
+                self.pending_out.pop_front();
+                debug!("[{}] bulk out #{seqnum} done: {len} bytes", self.serial);
+                self.send(usbip::ret_submit(seqnum, 0, len, &[]));
+            }
+        }
+    }
+
     fn send(&self, packet: Vec<u8>) {
         if let Some(reply) = &self.reply {
             let _ = reply.send(packet);
@@ -321,11 +342,14 @@ impl Sim {
             }
             EP_OUT => {
                 debug!("[{dev}] bulk out #{} {} bytes", urb.seqnum, urb.data.len());
+                // The chip ACKs OUT packets as soon as its buffer has room, so
+                // the data is on the wire without waiting for the next frame
                 self.chips[dev].pending_out.push_back(PendingOut {
                     seqnum: urb.seqnum,
                     data: urb.data,
                     done: 0,
-                })
+                });
+                self.chips[dev].fill_tx();
             }
             EP_IN => {
                 debug!("[{dev}] bulk in #{} up to {} bytes", urb.seqnum, urb.length);
@@ -443,6 +467,26 @@ impl Sim {
 
     /// Advances the simulation to `now`: transmits, receives, completes URBs.
     pub fn step(&mut self, now: u64) {
+        self.advance(now);
+        for chip in &mut self.chips {
+            while let Some(pending) = chip.pending_in.front() {
+                if chip.rx.is_empty() {
+                    break;
+                }
+                let n = pending.length.min(chip.rx.len());
+                let data: Vec<u8> = chip.rx.drain(..n).collect();
+                let seqnum = pending.seqnum;
+                chip.pending_in.pop_front();
+                debug!("[{}] bulk in #{seqnum} done: {n} bytes", chip.serial);
+                chip.send(usbip::ret_submit(seqnum, 0, n, &data));
+            }
+            chip.fill_tx();
+        }
+    }
+
+    /// Runs both wires up to `now` under the current line state. Called before
+    /// every URB so a pin or flow control change only affects bytes after it.
+    pub fn advance(&mut self, now: u64) {
         for dev in 0..2 {
             let (cts, _, _) = self.peer_pins(dev);
             let chip = &mut self.chips[dev];
@@ -482,37 +526,6 @@ impl Sim {
                 chip.inflight.pop_front();
             }
             self.lines[1 - dev].prune(chip.receiver.cursor);
-        }
-
-        for chip in &mut self.chips {
-            while let Some(pending) = chip.pending_in.front() {
-                if chip.rx.is_empty() {
-                    break;
-                }
-                let n = pending.length.min(chip.rx.len());
-                let data: Vec<u8> = chip.rx.drain(..n).collect();
-                let seqnum = pending.seqnum;
-                chip.pending_in.pop_front();
-                debug!("[{}] bulk in #{seqnum} done: {n} bytes", chip.serial);
-                chip.send(usbip::ret_submit(seqnum, 0, n, &data));
-            }
-            while let Some(pending) = chip.pending_out.front_mut() {
-                let room = TX_BUF - chip.tx.len() - chip.inflight.len();
-                let packet = (pending.data.len() - pending.done).min(MAX_PACKET);
-                if room < packet {
-                    break;
-                }
-                chip.tx
-                    .extend(&pending.data[pending.done..pending.done + packet]);
-                pending.done += packet;
-                if pending.done == pending.data.len() {
-                    let seqnum = pending.seqnum;
-                    let len = pending.data.len();
-                    chip.pending_out.pop_front();
-                    debug!("[{}] bulk out #{seqnum} done: {len} bytes", chip.serial);
-                    chip.send(usbip::ret_submit(seqnum, 0, len, &[]));
-                }
-            }
         }
     }
 
