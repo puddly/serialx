@@ -7,6 +7,7 @@ import asyncio
 from collections.abc import Iterator
 from contextlib import suppress
 import ctypes
+import dataclasses
 import errno
 import fcntl
 import logging
@@ -31,99 +32,198 @@ ASYNC_LOW_LATENCY = 1 << 13
 CMSPAR = 0o10000000000
 TCGETS = 0x5401
 
-_MACHINE = os.uname().machine
-IS_POWERPC = _MACHINE.startswith("ppc")
-IS_SPARC = _MACHINE.startswith("sparc")
-
-_IOC_NRBITS = 8
-_IOC_TYPEBITS = 8
-_IOC_SIZEBITS = 14
-_IOC_WRITE = 1
-_IOC_READ = 2
-
-if IS_POWERPC or IS_SPARC:
-    _IOC_SIZEBITS = 13
-    _IOC_WRITE = 4
-
-_IOC_NRSHIFT = 0
-_IOC_TYPESHIFT = _IOC_NRSHIFT + _IOC_NRBITS
-_IOC_SIZESHIFT = _IOC_TYPESHIFT + _IOC_TYPEBITS
-_IOC_DIRSHIFT = _IOC_SIZESHIFT + _IOC_SIZEBITS
-
-
-def _ioc(direction: int, request_type: int, number: int, size: int) -> int:
-    return (
-        (direction << _IOC_DIRSHIFT)
-        | (request_type << _IOC_TYPESHIFT)
-        | (number << _IOC_NRSHIFT)
-        | (size << _IOC_SIZESHIFT)
-    )
-
-
 TIOCGSERIAL = getattr(termios, "TIOCGSERIAL", None)
 TIOCSSERIAL = getattr(termios, "TIOCSSERIAL", None)
-if IS_POWERPC:
-    CBAUD = 0x000000FF
-    CBAUDEX = 0x00000000
-    BOTHER = 0x0000001F
-elif IS_SPARC:
-    CBAUD = 0x0000100F
-    CBAUDEX = 0x00001000
-    BOTHER = 0x00001000
-else:
-    CBAUD = getattr(termios, "CBAUD", 0o00010017)
-    CBAUDEX = getattr(termios, "CBAUDEX", 0o00010000)
-    BOTHER = getattr(termios, "BOTHER", CBAUDEX)
 
 # When we need to set a non-POSIX baudrate, we set the baudrates to a known default and
 # then override
 NON_POSIX_FALLBACK_BAUDRATE = 115200
 NON_POSIX_FALLBACK_BAUDRATE_CONST = termios.B115200
 
-# `NCCS` is 19 on every Linux architecture and the `struct termios2` layout has been
-# stable since 2007
-NCCS = 19
-
 
 class Termios2Struct(ctypes.Structure):
-    """The `termios2` struct."""
+    """The generic `struct termios2`."""
 
     _pack_ = 1
     _layout_ = "ms"
+    _fields_ = (
+        ("c_iflag", ctypes.c_uint32),
+        ("c_oflag", ctypes.c_uint32),
+        ("c_cflag", ctypes.c_uint32),
+        ("c_lflag", ctypes.c_uint32),
+        ("c_line", ctypes.c_uint8),
+        ("c_cc", ctypes.c_uint8 * 19),
+        ("c_ispeed", ctypes.c_uint32),
+        ("c_ospeed", ctypes.c_uint32),
+    )
 
-    if IS_POWERPC:
-        _fields_ = (
-            ("c_iflag", ctypes.c_uint32),
-            ("c_oflag", ctypes.c_uint32),
-            ("c_cflag", ctypes.c_uint32),
-            ("c_lflag", ctypes.c_uint32),
-            ("c_cc", ctypes.c_uint8 * NCCS),
-            ("c_line", ctypes.c_uint8),
-            ("c_ispeed", ctypes.c_uint32),
-            ("c_ospeed", ctypes.c_uint32),
+
+class AlphaTermios2Struct(ctypes.Structure):
+    """Alpha and PowerPC `struct termios2`."""
+
+    _pack_ = 1
+    _layout_ = "ms"
+    _fields_ = (
+        ("c_iflag", ctypes.c_uint32),
+        ("c_oflag", ctypes.c_uint32),
+        ("c_cflag", ctypes.c_uint32),
+        ("c_lflag", ctypes.c_uint32),
+        # `c_cc` is before `c_line`
+        ("c_cc", ctypes.c_uint8 * 19),
+        ("c_line", ctypes.c_uint8),
+        ("c_ispeed", ctypes.c_uint32),
+        ("c_ospeed", ctypes.c_uint32),
+    )
+
+
+class MipsTermios2Struct(ctypes.Structure):
+    """MIPS `struct termios2`."""
+
+    _pack_ = 1
+    _layout_ = "ms"
+    _fields_ = (
+        ("c_iflag", ctypes.c_uint32),
+        ("c_oflag", ctypes.c_uint32),
+        ("c_cflag", ctypes.c_uint32),
+        ("c_lflag", ctypes.c_uint32),
+        ("c_line", ctypes.c_uint8),
+        # `NCCS = 23`
+        ("c_cc", ctypes.c_uint8 * 23),
+        ("c_ispeed", ctypes.c_uint32),
+        ("c_ospeed", ctypes.c_uint32),
+    )
+
+
+@dataclasses.dataclass(frozen=True, kw_only=True)
+class IoctlEncoding:
+    """The `_IOC` request encoding from `asm/ioctl.h`."""
+
+    size_bits: int
+    read: int
+    write: int
+
+    def encode(self, direction: int, request: tuple[str, int], size: int) -> int:
+        """Encode an `_IOC(direction, type, nr, size)` request number."""
+        request_type, number = request
+        return (
+            (direction << (16 + self.size_bits))
+            | (size << 16)
+            | (ord(request_type) << 8)
+            | number
         )
-    else:
-        _fields_ = (
-            ("c_iflag", ctypes.c_uint32),
-            ("c_oflag", ctypes.c_uint32),
-            ("c_cflag", ctypes.c_uint32),
-            ("c_lflag", ctypes.c_uint32),
-            ("c_line", ctypes.c_uint8),
-            ("c_cc", ctypes.c_uint8 * NCCS),
-            ("c_ispeed", ctypes.c_uint32),
-            ("c_ospeed", ctypes.c_uint32),
+
+
+@dataclasses.dataclass(frozen=True)
+class Termios2Abi:
+    """The `termios2` ABI, from `asm/{ioctl,ioctls,termbits}.h`."""
+
+    ioctl: IoctlEncoding
+    struct: type[ctypes.Structure]
+    get_request: tuple[str, int]
+    set_request: tuple[str, int]
+    cbaud: int
+    bother: int
+
+    @property
+    def tcgets2(self) -> int:
+        """The `TCGETS2` request number."""
+        return self.ioctl.encode(
+            self.ioctl.read,
+            self.get_request,
+            ctypes.sizeof(self.struct),
         )
 
+    @property
+    def tcsets2(self) -> int:
+        """The `TCSETS2` request number."""
+        return self.ioctl.encode(
+            self.ioctl.write,
+            self.set_request,
+            ctypes.sizeof(self.struct),
+        )
 
-if IS_POWERPC:
-    TCGETS2 = _ioc(_IOC_READ, ord("t"), 19, ctypes.sizeof(Termios2Struct))
-    TCSETS2 = _ioc(_IOC_WRITE, ord("t"), 20, ctypes.sizeof(Termios2Struct))
-elif IS_SPARC:
-    TCGETS2 = _ioc(_IOC_READ, ord("T"), 12, ctypes.sizeof(Termios2Struct))
-    TCSETS2 = _ioc(_IOC_WRITE, ord("T"), 13, ctypes.sizeof(Termios2Struct))
-else:
-    TCGETS2 = _ioc(_IOC_READ, ord("T"), 0x2A, ctypes.sizeof(Termios2Struct))
-    TCSETS2 = _ioc(_IOC_WRITE, ord("T"), 0x2B, ctypes.sizeof(Termios2Struct))
+    def validate(self, buffer: bytearray) -> None:
+        """Ensure a `TCGETS2` readback matches the struct layout we expect."""
+        termios2 = self.struct.from_buffer(buffer)
+        if termios2.c_ispeed == 0 or termios2.c_ospeed == 0:
+            raise RuntimeError(f"termios2 speed fields are zero: {buffer.hex()}")
+
+
+@dataclasses.dataclass(frozen=True)
+class PowerPcTermios2Abi(Termios2Abi):
+    """PowerPC has no `termios2`: its `struct termios` already has the speed fields."""
+
+    def validate(self, buffer: bytearray) -> None:
+        """Ensure a `TCGETS` readback is not all zeroes."""
+        # The speed fields can read back as zero until `BOTHER` is written
+        if not any(buffer):
+            raise RuntimeError(f"termios2 speed fields are zero: {buffer.hex()}")
+
+
+# Keyed by `uname -m` prefix
+TERMIOS2_ABIS: dict[str, Termios2Abi] = {
+    "alpha": Termios2Abi(
+        ioctl=IoctlEncoding(size_bits=13, read=2, write=4),
+        struct=AlphaTermios2Struct,
+        get_request=("T", 0x2A),
+        set_request=("T", 0x2B),
+        cbaud=0x0000001F,
+        bother=0x0000001F,
+    ),
+    "mips": Termios2Abi(
+        ioctl=IoctlEncoding(size_bits=13, read=2, write=4),
+        struct=MipsTermios2Struct,
+        get_request=("T", 0x2A),
+        set_request=("T", 0x2B),
+        cbaud=0x0000100F,
+        bother=0x00001000,
+    ),
+    "parisc": Termios2Abi(
+        ioctl=IoctlEncoding(size_bits=14, read=1, write=2),
+        struct=Termios2Struct,
+        get_request=("T", 0x2A),
+        set_request=("T", 0x2B),
+        cbaud=0x0000100F,
+        bother=0x00001000,
+    ),
+    "ppc": PowerPcTermios2Abi(
+        ioctl=IoctlEncoding(size_bits=13, read=2, write=4),
+        struct=AlphaTermios2Struct,
+        # `TCGETS` and `TCSETS`
+        get_request=("t", 19),
+        set_request=("t", 20),
+        cbaud=0x000000FF,
+        bother=0x0000001F,
+    ),
+    "sparc": Termios2Abi(
+        ioctl=IoctlEncoding(size_bits=13, read=2, write=4),
+        struct=Termios2Struct,
+        get_request=("T", 12),
+        set_request=("T", 13),
+        cbaud=0x0000100F,
+        bother=0x00001000,
+    ),
+}
+
+
+def get_termios2_abi(machine: str) -> Termios2Abi:
+    """Get the `termios2` ABI for a `uname -m` machine name."""
+    for prefix, abi in TERMIOS2_ABIS.items():
+        if machine.startswith(prefix):
+            return abi
+
+    # Generic fallback
+    return Termios2Abi(
+        ioctl=IoctlEncoding(size_bits=14, read=2, write=1),
+        struct=Termios2Struct,
+        get_request=("T", 0x2A),
+        set_request=("T", 0x2B),
+        cbaud=0x0000100F,
+        bother=0x00001000,
+    )
+
+
+TERMIOS2_ABI = get_termios2_abi(os.uname().machine)
 
 
 class LinuxSerial(ExtendedPosixSerial):
@@ -143,29 +243,23 @@ class LinuxSerial(ExtendedPosixSerial):
         """Set the baudrate of the serial port, must be called after `tcsetattr`."""
         assert self._fileno is not None
 
-        buffer = bytearray(ctypes.sizeof(Termios2Struct))
-        fcntl.ioctl(self._fileno, TCGETS2, buffer)
+        abi = TERMIOS2_ABI
+        buffer = bytearray(ctypes.sizeof(abi.struct))
+        fcntl.ioctl(self._fileno, abi.tcgets2, buffer)
+        abi.validate(buffer)
 
-        termios2 = Termios2Struct.from_buffer(buffer)
-
-        # A zero-filled readback means the ioctl/struct ABI is not the one we expect.
-        # PowerPC can report zero speed fields until BOTHER is written, so only the
-        # all-zero case is invalid there.
-        if not any(buffer) or (
-            not IS_POWERPC and (termios2.c_ispeed == 0 or termios2.c_ospeed == 0)
-        ):
-            raise RuntimeError(f"termios2 speed fields are zero: {buffer.hex()}")
+        termios2 = abi.struct.from_buffer(buffer)
 
         # The POSIX baudrates are stored in the lower bits of `c_cflag`. We clear them.
-        termios2.c_cflag &= ~CBAUD
-        termios2.c_cflag |= BOTHER
+        termios2.c_cflag &= ~abi.cbaud
+        termios2.c_cflag |= abi.bother
 
         termios2.c_ispeed = baudrate
         termios2.c_ospeed = baudrate
 
         # The ctypes structure mutates the buffer in place
         LOGGER.debug("Writing termios2 struct: %r", buffer.hex())
-        fcntl.ioctl(self._fileno, TCSETS2, buffer)
+        fcntl.ioctl(self._fileno, abi.tcsets2, buffer)
 
     def _build_parity_flags(self) -> int:
         if self._parity == Parity.NONE:
