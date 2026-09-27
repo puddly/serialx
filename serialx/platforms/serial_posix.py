@@ -29,6 +29,7 @@ from ..common import (
     PortSettingsUpdate,
     StopBits,
     UnsupportedSetting,
+    measure_time,
     register_uri_handler,
 )
 from ..descriptor_transport import DescriptorTransport
@@ -118,7 +119,7 @@ class PosixSerial(BaseSerial):
             raise ValueError("Serial port is already open")
 
         assert self._path is not None
-        self._fileno = os.open(self._path, os.O_RDWR | os.O_NOCTTY)
+        self._fileno = os.open(self._path, os.O_RDWR | os.O_NOCTTY | os.O_NONBLOCK)
         self._auto_close = True
 
         if self._exclusive:
@@ -406,12 +407,15 @@ class PosixSerial(BaseSerial):
             """Read bytes from serial port into buffer."""
             assert self._fileno is not None
 
-            if timeout is not None:
-                ready, _, _ = select.select([self._fileno], [], [], timeout)
-                if not ready:
-                    return 0
+            ready, _, _ = select.select([self._fileno], [], [], timeout)
+            if not ready:
+                return 0
 
-            n = os.readinto(self._fileno, b)
+            try:
+                n = os.readinto(self._fileno, b)
+            except BlockingIOError:
+                return 0
+
             LOGGER.debug("Read %d bytes", n)
 
             if n == 0:
@@ -430,16 +434,18 @@ class PosixSerial(BaseSerial):
             """Read bytes from serial port into buffer."""
             assert self._fileno is not None
 
-            if timeout is not None:
-                ready, _, _ = select.select([self._fileno], [], [], timeout)
-                if not ready:
-                    return 0
+            ready, _, _ = select.select([self._fileno], [], [], timeout)
+            if not ready:
+                return 0
 
             m = memoryview(b).cast("B")
             size = len(m)
             LOGGER.debug("Reading up to %d bytes", size)
 
-            chunk = os.read(self._fileno, size)
+            try:
+                chunk = os.read(self._fileno, size)
+            except BlockingIOError:
+                return 0
 
             n = len(chunk)
             m[:n] = chunk
@@ -460,12 +466,28 @@ class PosixSerial(BaseSerial):
         LOGGER.debug("Writing %d bytes: %r", len(data), data)  # type: ignore[arg-type]
         assert self._fileno is not None
 
-        if timeout is not None:
-            _, ready, _ = select.select([], [self._fileno], [], timeout)
+        view = memoryview(data).cast("B")
+        remaining_timeout = timeout
+        written = 0
+
+        while written < len(view):
+            with measure_time() as get_elapsed:
+                _, ready, _ = select.select([], [self._fileno], [], remaining_timeout)
+
             if not ready:
                 raise TimeoutError("Write timeout")
 
-        return os.write(self._fileno, data)
+            if remaining_timeout is not None:
+                remaining_timeout = max(remaining_timeout - get_elapsed(), 0)
+
+            try:
+                n = os.write(self._fileno, view[written:])
+            except BlockingIOError:
+                continue
+
+            written += n
+
+        return written
 
     def num_unread_bytes(self) -> int:
         """Return the number of bytes waiting to be read."""

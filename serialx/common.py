@@ -267,6 +267,7 @@ class _CommonConnectKwargs(TypedDict, total=False):
     bytesize: int | None
     writeTimeout: float | None
     do_not_open: bool | None
+    inter_byte_timeout: float
 
 
 class ConnectKwargs(  # type: ignore[call-arg]  # PEP 728 not in mypy yet
@@ -466,7 +467,7 @@ class BaseSerial(io.RawIOBase):
         bytesize: int | None = None,
         do_not_open: bool | None = None,
         writeTimeout: float | None = None,
-        inter_byte_timeout: int | None = None,
+        inter_byte_timeout: float | None = None,
         # Legacy kwargs
         rtsdtr_on_open: PinState = PinState.UNDEFINED,
         rtsdtr_on_close: PinState = PinState.UNDEFINED,

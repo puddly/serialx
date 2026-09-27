@@ -737,6 +737,137 @@ def test_sync_read_timeout_with_partial_data(serial_pair: SerialPair) -> None:
         assert elapsed() < 0.2
 
 
+def test_sync_short_timeout_preserves_buffered_bytes(serial_pair: SerialPair) -> None:
+    """A read whose timeout expires before the inter byte timeout must still succeed."""
+    with (
+        Serial.from_url(serial_pair.left, baudrate=115200) as left,
+        Serial.from_url(
+            serial_pair.right,
+            baudrate=115200,
+            # On Win32 this pushes the COMMTIMEOUTS gap timer past the caller
+            # deadline, forcing the cancel path. Ignored / harmless elsewhere.
+            inter_byte_timeout=1.0,
+        ) as right,
+    ):
+        left.write(b"hello")
+        left.flush()
+
+        buf = bytearray(4096)
+        n = right.readinto(buf, timeout=0.2)
+
+        assert n == 5
+        assert bytes(buf[:n]) == b"hello"
+
+
+def test_sync_zero_timeout_returns_buffered_data(serial_pair: SerialPair) -> None:
+    """Reading with `timeout=0` should return buffered data immediately."""
+    with (
+        Serial.from_url(serial_pair.left, baudrate=115200) as left,
+        Serial.from_url(
+            serial_pair.right,
+            baudrate=115200,
+            inter_byte_timeout=1.0,
+        ) as right,
+    ):
+        left.write(b"hello")
+        left.flush()
+        time.sleep(0.1)
+
+        buf = bytearray(4096)
+        with measure_time() as elapsed:
+            n = right.readinto(buf, timeout=0)
+
+        assert n == 5
+        assert bytes(buf[:n]) == b"hello"
+        assert elapsed() < 0.05
+
+
+def test_sync_buffered_bytes_recovered_after_short_timeout(
+    serial_pair: SerialPair,
+) -> None:
+    """Bytes are deferred, not lost, after a short timeout."""
+    with (
+        Serial.from_url(serial_pair.left, baudrate=115200) as left,
+        Serial.from_url(
+            serial_pair.right,
+            baudrate=115200,
+            inter_byte_timeout=1.0,
+        ) as right,
+    ):
+        left.write(b"hello")
+        left.flush()
+        time.sleep(0.1)
+
+        buf = bytearray(4096)
+        view = memoryview(buf)
+        n1 = right.readinto(view, timeout=0.05)
+        n2 = right.readinto(view[n1:], timeout=1.0)
+
+        assert n1 + n2 == 5
+        assert bytes(buf[: n1 + n2]) == b"hello"
+
+
+def test_sync_inter_byte_timeout_bounds_trailing_latency(
+    serial_pair: SerialPair,
+) -> None:
+    """`inter_byte_timeout` sets the trailing-chunk latency."""
+    # Only native Win32 ports honor `inter_byte_timeout`, POSIX reads are non-blocking
+    if sys.platform != "win32" or serial_pair.backends != (SerialBackend.ADAPTER,):
+        pytest.skip("Only native Win32 ports support `inter_byte_timeout`")
+
+    with (
+        Serial.from_url(serial_pair.left, baudrate=115200) as left,
+        Serial.from_url(
+            serial_pair.right,
+            baudrate=115200,
+            inter_byte_timeout=0.1,
+        ) as right,
+    ):
+        left.write(b"hello")
+        left.flush()
+
+        buf = bytearray(4096)
+        with measure_time() as elapsed:
+            n = right.readinto(buf, timeout=2.0)
+
+        assert n == 5
+        assert bytes(buf[:n]) == b"hello"
+        assert elapsed() == pytest.approx(0.1, abs=0.08)
+
+
+@pytest.mark.skip_quirks(SerialQuirk.NO_WRITE_TIMEOUT)
+def test_sync_write_short_timeout_partial_delivery(serial_pair: SerialPair) -> None:
+    """A `write_timeout` firing should still deliver the bytes the kernel pushed."""
+    with (
+        Serial.from_url(
+            serial_pair.left,
+            baudrate=9600,
+            write_timeout=0.1,
+        ) as left,
+        Serial.from_url(serial_pair.right, baudrate=9600) as right,
+    ):
+        data = b"x" * 1024
+
+        with measure_time() as elapsed:
+            with pytest.raises(TimeoutError):
+                for _ in range(1000):
+                    left.write(data)
+
+        assert elapsed() == pytest.approx(0.1, abs=0.2)
+
+        buf = bytearray(2 * 1024 * 1024)
+        view = memoryview(buf)
+        received = 0
+        drain_deadline = time.monotonic() + 2.0
+        while time.monotonic() < drain_deadline:
+            n = right.readinto(view[received:], timeout=0.3)
+            if n == 0:
+                break
+            received += n
+
+        assert received > 0
+
+
 def test_sync_readexactly_partial_timeout(serial_pair: SerialPair) -> None:
     """Test that readexactly(10) with only 5 bytes raises IncompleteReadError."""
     with (
