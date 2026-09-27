@@ -319,11 +319,20 @@ async def test_lifecycle_close_drains_pending_writes(
     receiver_proto.assert_clean()
 
 
-@pytest.mark.skip_quirks(SerialQuirk.NO_RTS_CTS, SerialQuirk.NO_WRITE_BUFFERING)
+@pytest.mark.skip_quirks(
+    SerialQuirk.NO_RTS_CTS,
+    SerialQuirk.NO_WRITE_BUFFERING,
+    # `abort()` cannot discard what the kernel already holds, so `os.close` waits
+    # out the driver's closing_wait
+    SerialQuirk.NO_RESET_WRITE_BUFFER,
+)
 async def test_lifecycle_close_timeout_aborts_stalled_drain(
     serial_pair: SerialPair,
 ) -> None:
     """close() escalates to abort() once `close_timeout` elapses with CTS held."""
+    if serial_pair.uri_scheme == "posix://":
+        pytest.xfail("Strict POSIX backend does not support RTS/CTS flow control")
+
     loop = asyncio.get_running_loop()
     sender_proto = RecordingProtocol()
     receiver_proto = RecordingProtocol()
@@ -335,17 +344,18 @@ async def test_lifecycle_close_timeout_aborts_stalled_drain(
         baudrate=9600,
         rts_on_open=PinState.LOW,
     )
-    await asyncio.sleep(serial_pair.modem_line_propagation_delay)
-    sender, _ = await create_serial_connection(
-        loop,
-        lambda: sender_proto,
-        serial_pair.left,
-        baudrate=9600,
-        rtscts=True,
-        close_timeout=0.5,
-    )
 
     try:
+        await asyncio.sleep(serial_pair.modem_line_propagation_delay)
+        sender, _ = await create_serial_connection(
+            loop,
+            lambda: sender_proto,
+            serial_pair.left,
+            baudrate=9600,
+            rtscts=True,
+            close_timeout=0.5,
+        )
+
         sender.write(b"x" * 1024)
         sender.close()
 
