@@ -2,6 +2,8 @@
 
 import asyncio
 import sys
+from typing import Any
+from unittest.mock import patch
 
 import pytest
 
@@ -63,16 +65,22 @@ def test_socket_connect_timeout() -> None:
 
 async def test_async_socket_connect_timeout() -> None:
     """Test that connect_timeout is respected by SocketSerialTransport."""
-    url = "socket://192.0.2.1:1234"
+    loop = asyncio.get_running_loop()
 
-    with measure_time() as elapsed:
-        with pytest.raises((OSError, TimeoutError, asyncio.TimeoutError)):
-            await create_serial_connection(
-                asyncio.get_running_loop(),
-                asyncio.Protocol,
-                url=url,
-                baudrate=115200,
-                connect_timeout=0.2,
-            )
+    async def create_connection_forever(*args: Any, **kwargs: Any) -> Any:
+        await loop.create_future()
+
+    with (
+        patch.object(loop, "create_connection", create_connection_forever),
+        measure_time() as elapsed,
+        pytest.raises((TimeoutError, asyncio.TimeoutError)),
+    ):
+        await create_serial_connection(
+            loop,
+            asyncio.Protocol,
+            url="socket://127.0.0.1:1234",
+            baudrate=115200,
+            connect_timeout=0.2,
+        )
 
     assert 0.2 <= elapsed() < 1.0
