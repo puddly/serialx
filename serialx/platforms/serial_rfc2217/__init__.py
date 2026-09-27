@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Generator
 from contextlib import suppress
+import dataclasses
 from enum import IntEnum
 import errno
 import logging
@@ -25,6 +26,7 @@ from ...common import (
     ModemPins,
     Parity,
     PinState,
+    PortSettingsUpdate,
     SerialException,
     StopBits,
     UnsupportedSetting,
@@ -281,34 +283,36 @@ class Rfc2217:
         return self._pending_rfc2217.pop(cmd_id, None)
 
     def build_port_config_commands(
-        self,
-        *,
-        baudrate: int,
-        byte_size: int,
-        parity: Parity,
-        stopbits: StopBits,
-        rtscts: bool,
-        xonxoff: bool,
-    ) -> tuple[Rfc2217Command, ...]:
-        """Build the RFC2217 commands needed to configure the remote port."""
-        if rtscts and xonxoff:
+        self, update: PortSettingsUpdate
+    ) -> Generator[Rfc2217Command]:
+        """Build the RFC2217 commands for the settings present in the update."""
+        if update.rtscts and update.xonxoff:
             raise UnsupportedSetting(
                 "Cannot enable both RTS/CTS and XON/XOFF flow control"
             )
 
-        if rtscts:
-            flow_control = ControlCmdId.USE_HARDWARE
-        elif xonxoff:
-            flow_control = ControlCmdId.USE_XON_XOFF
-        else:
-            flow_control = ControlCmdId.USE_NO_FLOW_CONTROL
+        if update.baudrate is not None:
+            yield SetBaudrateCmd(baudrate=update.baudrate)
 
+        if update.byte_size is not None:
+            yield SetDatasizeCmd(size=update.byte_size)
+
+        if update.parity is not None:
+            yield SetParityCmd(parity=RFC2217_PARITY_MAP[update.parity])
+
+        if update.stopbits is not None:
+            yield SetStopsizeCmd(size=RFC2217_STOPBITS_MAP[update.stopbits])
+
+        if update.rtscts:
+            yield SetControlCmd(control=ControlCmdId.USE_HARDWARE)
+        elif update.xonxoff:
+            yield SetControlCmd(control=ControlCmdId.USE_XON_XOFF)
+        elif update.rtscts is not None or update.xonxoff is not None:
+            yield SetControlCmd(control=ControlCmdId.USE_NO_FLOW_CONTROL)
+
+    def build_state_mask_commands(self) -> tuple[Rfc2217Command, ...]:
+        """Build the commands that subscribe to modem and line state changes."""
         return (
-            SetBaudrateCmd(baudrate=baudrate),
-            SetDatasizeCmd(size=byte_size),
-            SetParityCmd(parity=RFC2217_PARITY_MAP[parity]),
-            SetStopsizeCmd(size=RFC2217_STOPBITS_MAP[stopbits]),
-            SetControlCmd(control=flow_control),
             SetModemstateMaskCmd(mask=ModemStateFlag(255)),
             SetLinestateMaskCmd(mask=LineStateFlag(0)),
         )
@@ -462,33 +466,34 @@ class RFC2217Serial(SocketSerial):
         self._engine.mark_negotiated()
         LOGGER.debug("Negotiation complete: server accepted COM-PORT-OPTION")
 
-    def _configure_port(self) -> None:
+        for cmd in self._engine.build_state_mask_commands():
+            with self._socket_timeout(self._connect_timeout):
+                self._send_and_wait(cmd)
+
+    def _build_port_config_commands(
+        self, update: PortSettingsUpdate
+    ) -> Generator[Rfc2217Command]:
+        # Flow control is a single RFC 2217 setting, so send the merged state
+        if update.rtscts is not None or update.xonxoff is not None:
+            settings = dataclasses.replace(
+                update, rtscts=self._rtscts, xonxoff=self._xonxoff
+            )
+        else:
+            settings = update
+
+        return self._engine.build_port_config_commands(settings)
+
+    def _reconfigure_port(self, update: PortSettingsUpdate) -> None:
         """Send serial port configuration to the access server."""
         # Let parent set socket timeout
-        super()._configure_port()
+        super()._reconfigure_port(update)
 
         if not self._engine.negotiated:
             return
 
-        LOGGER.debug(
-            "Configuring port: baudrate=%d byte_size=%d parity=%s stopbits=%s "
-            "rtscts=%s xonxoff=%s",
-            self._baudrate,
-            self._byte_size,
-            self._parity,
-            self._stopbits,
-            self._rtscts,
-            self._xonxoff,
-        )
+        LOGGER.debug("Configuring port: %s", update)
 
-        for cmd in self._engine.build_port_config_commands(
-            baudrate=self._baudrate,
-            byte_size=self._byte_size,
-            parity=self._parity,
-            stopbits=self._stopbits,
-            rtscts=self._rtscts,
-            xonxoff=self._xonxoff,
-        ):
+        for cmd in self._build_port_config_commands(update):
             with self._socket_timeout(self._connect_timeout):
                 self._send_and_wait(cmd)
 
@@ -758,7 +763,7 @@ class RFC2217SerialTransport(BaseSerialTransport):
                 return
 
             await self._negotiate()
-            await self._configure_port()
+            await self._reconfigure_port(self._serial._all_settings())
 
         self._call_protocol_connection_made()
 
@@ -800,29 +805,15 @@ class RFC2217SerialTransport(BaseSerialTransport):
         self._serial._engine.mark_negotiated()
         LOGGER.debug("Negotiation complete: server accepted COM-PORT-OPTION")
 
-    async def _configure_port(self) -> None:
+        for cmd in self._serial._engine.build_state_mask_commands():
+            await self._send_and_wait(cmd)
+
+    async def _reconfigure_port(self, update: PortSettingsUpdate) -> None:
         """Send serial port configuration to the access server."""
         assert self._serial is not None
+        LOGGER.debug("Configuring port: %s", update)
 
-        LOGGER.debug(
-            "Configuring port: baudrate=%d byte_size=%d parity=%s stopbits=%s "
-            "rtscts=%s xonxoff=%s",
-            self._serial._baudrate,
-            self._serial._byte_size,
-            self._serial._parity,
-            self._serial._stopbits,
-            self._serial._rtscts,
-            self._serial._xonxoff,
-        )
-
-        for cmd in self._serial._engine.build_port_config_commands(
-            baudrate=self._serial._baudrate,
-            byte_size=self._serial._byte_size,
-            parity=self._serial._parity,
-            stopbits=self._serial._stopbits,
-            rtscts=self._serial._rtscts,
-            xonxoff=self._serial._xonxoff,
-        ):
+        for cmd in self._serial._build_port_config_commands(update):
             await self._send_and_wait(cmd)
 
         LOGGER.debug("Port configuration complete")
@@ -1017,6 +1008,7 @@ class RFC2217SerialTransport(BaseSerialTransport):
             return
         self._closing = True
         self._mark_user_closed()
+        self._arm_close_timeout()
 
         if self._tcp_transport is None:
             self._tcp_connection_lost(None)

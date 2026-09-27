@@ -24,6 +24,7 @@ from serialx.common import (
     AllConnectKwargs,
     BaseSerial,
     BaseSerialTransport,
+    PortSettingsUpdate,
     SerialPortInfo,
     UnknownUriScheme,
     get_uri_handler,
@@ -150,7 +151,7 @@ class _StubSerial(BaseSerial):
 
     def _open(self) -> None: ...
     def _close(self) -> None: ...
-    def _configure_port(self) -> None: ...
+    def _reconfigure_port(self, update: PortSettingsUpdate) -> None: ...
     def _flush(self) -> None: ...
     def _readinto(self, buf: Any) -> int: ...  # type:ignore[empty-body, override]
     def _write(self, data: Any) -> int: ...  # type:ignore[empty-body, override]

@@ -443,6 +443,52 @@ async def test_async_rtscts_setting(serial_pair: SerialPair, rtscts: bool) -> No
             left.write_nowait(b"test")
 
 
+async def test_async_reconfigure_flow_control(serial_pair: SerialPair) -> None:
+    """Test that flow control can be switched on an open port."""
+    if serial_pair.uri_scheme == "posix://":
+        pytest.xfail("Strict POSIX backend does not support RTS/CTS flow control")
+
+    if SerialBackend.ESPHOME_HOST in serial_pair.backends:
+        pytest.xfail("ESPHome host does not support RTS/CTS flow control")
+
+    async with serialx.async_serial_for_url(serial_pair.right, baudrate=9600) as right:
+        async with serialx.async_serial_for_url(
+            serial_pair.left, baudrate=9600
+        ) as left:
+            await left.write(b"before")
+            assert await right.readexactly(6) == b"before"
+
+            await left.reconfigure_port(rtscts=True, xonxoff=False, dsrdtr=False)
+
+            await left.write(b"after")
+            assert await right.readexactly(5) == b"after"
+
+
+@pytest.mark.skip_quirks(SerialQuirk.NO_RTS_CTS, SerialQuirk.NO_PAUSE_WRITING_CALLBACKS)
+async def test_async_reconfigure_rtscts_holds_writes(serial_pair: SerialPair) -> None:
+    """Test that enabling RTS/CTS on an open port makes a held CTS line stall writes."""
+    async with serialx.async_serial_for_url(
+        serial_pair.right, baudrate=115200
+    ) as right:
+        await right.set_modem_pins(rts=False)
+        await asyncio.sleep(serial_pair.modem_line_propagation_delay)
+
+        # `close()` drains, so bound it or it waits on CTS forever
+        async with serialx.async_serial_for_url(
+            serial_pair.left, baudrate=115200, close_timeout=0.5
+        ) as left:
+            async with asyncio_timeout(1):
+                await left.write(b"x" * 1024)
+                await left.flush()
+
+            await left.reconfigure_port(rtscts=True)
+
+            with pytest.raises(TimeoutError):
+                async with asyncio_timeout(0.5):
+                    await left.write(b"x" * 1024)
+                    await left.flush()
+
+
 # --- Lifecycle ---
 
 

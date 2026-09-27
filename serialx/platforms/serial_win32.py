@@ -52,6 +52,7 @@ from ..common import (
     ModemPins,
     Parity,
     PinState,
+    PortSettingsUpdate,
     StopBits,
     register_uri_handler,
 )
@@ -203,13 +204,23 @@ class Win32Serial(BaseSerial):
         self._overlapped_write.hEvent = CreateEvent(None, 1, 0, None)
 
         self._auto_close = True
+        self._setup_comm()
 
     @property
     def is_open(self) -> bool:
         """Check if the serial port is open."""
         return self._handle is not None
 
-    def _configure_port(self) -> None:
+    def _setup_comm(self) -> None:
+        """Set up and clear the driver buffers, once per open."""
+        assert self._handle is not None
+        SetupComm(self._handle, self._read_buffer_size, self._write_buffer_size)
+        PurgeComm(
+            self._handle,
+            PURGE_TXABORT | PURGE_RXABORT | PURGE_TXCLEAR | PURGE_RXCLEAR,
+        )
+
+    def _reconfigure_port(self, update: PortSettingsUpdate) -> None:
         """Configure the serial port settings."""
         assert self._handle is not None
 
@@ -232,50 +243,53 @@ class Win32Serial(BaseSerial):
             )
             SetCommTimeouts(self._handle, timeouts)
 
-            # Setup buffers
-            SetupComm(self._handle, self._read_buffer_size, self._write_buffer_size)
-
-            # Clear buffers
-            PurgeComm(
-                self._handle,
-                PURGE_TXABORT | PURGE_RXABORT | PURGE_TXCLEAR | PURGE_RXCLEAR,
-            )
-
             # Configure DCB (Device Control Block)
             dcb = cast(Any, GetCommState(self._handle))  # TODO: fix in typeshed
-            dcb.BaudRate = self._baudrate
-            dcb.ByteSize = self._byte_size
-            dcb.StopBits = WIN32_STOPBITS_MAP[self._stopbits]
-            dcb.Parity = WIN32_PARITY_MAP[self._parity]
+
+            if update.baudrate is not None:
+                dcb.BaudRate = update.baudrate
+
+            if update.byte_size is not None:
+                dcb.ByteSize = update.byte_size
+
+            if update.stopbits is not None:
+                dcb.StopBits = WIN32_STOPBITS_MAP[update.stopbits]
+
+            if update.parity is not None:
+                dcb.Parity = WIN32_PARITY_MAP[update.parity]
+
             dcb.fBinary = 1  # Always True on Windows
 
             # Flow Control
-            if self._rtscts:
-                dcb.fRtsControl = RTS_CONTROL_HANDSHAKE
-                dcb.fOutxCtsFlow = 1
-            elif self._rts_on_open is PinState.LOW:
-                dcb.fRtsControl = RTS_CONTROL_DISABLE
-                dcb.fOutxCtsFlow = 0
-            else:
-                dcb.fRtsControl = RTS_CONTROL_ENABLE
-                dcb.fOutxCtsFlow = 0
+            if update.rtscts is not None:
+                if update.rtscts:
+                    dcb.fRtsControl = RTS_CONTROL_HANDSHAKE
+                    dcb.fOutxCtsFlow = 1
+                elif self._rts_on_open is PinState.LOW:
+                    dcb.fRtsControl = RTS_CONTROL_DISABLE
+                    dcb.fOutxCtsFlow = 0
+                else:
+                    dcb.fRtsControl = RTS_CONTROL_ENABLE
+                    dcb.fOutxCtsFlow = 0
 
-            if self._xonxoff:
-                dcb.fOutX = 1
-                dcb.fInX = 1
-            else:
-                dcb.fOutX = 0
-                dcb.fInX = 0
+            if update.xonxoff is not None:
+                if update.xonxoff:
+                    dcb.fOutX = 1
+                    dcb.fInX = 1
+                else:
+                    dcb.fOutX = 0
+                    dcb.fInX = 0
 
-            if self._dsrdtr:
-                dcb.fDtrControl = DTR_CONTROL_HANDSHAKE
-                dcb.fOutxDsrFlow = 1
-            elif self._dtr_on_open is PinState.LOW:
-                dcb.fDtrControl = DTR_CONTROL_DISABLE
-                dcb.fOutxDsrFlow = 0
-            else:
-                dcb.fDtrControl = DTR_CONTROL_ENABLE
-                dcb.fOutxDsrFlow = 0
+            if update.dsrdtr is not None:
+                if update.dsrdtr:
+                    dcb.fDtrControl = DTR_CONTROL_HANDSHAKE
+                    dcb.fOutxDsrFlow = 1
+                elif self._dtr_on_open is PinState.LOW:
+                    dcb.fDtrControl = DTR_CONTROL_DISABLE
+                    dcb.fOutxDsrFlow = 0
+                else:
+                    dcb.fDtrControl = DTR_CONTROL_ENABLE
+                    dcb.fOutxDsrFlow = 0
 
             dcb.fDsrSensitivity = 0
             dcb.fErrorChar = 0
@@ -641,7 +655,10 @@ class Win32SerialTransport(BaseSerialTransport):
             )
             self._extra["serial"] = self._serial
 
-            await self._loop.run_in_executor(None, self._serial.configure_port)
+            await self._loop.run_in_executor(None, self._serial._setup_comm)
+            await self._loop.run_in_executor(
+                None, self._serial._reconfigure_port, self._serial._all_settings()
+            )
 
             if self._closing:
                 await self._loop.run_in_executor(None, self._serial.close)  # type: ignore[unreachable]
@@ -727,6 +744,8 @@ class Win32SerialTransport(BaseSerialTransport):
     def close(self) -> None:
         """Close the transport."""
         self._closing = True
+        self._arm_close_timeout()
+
         if self._internal_transport is not None:
             # Internal transport closes self._serial via sock.close()
             self._internal_transport.close()
@@ -779,6 +798,10 @@ class Win32SerialTransport(BaseSerialTransport):
         """Set modem control bits, internal."""
         assert self._serial is not None
         await self._loop.run_in_executor(None, self._serial.set_modem_pins, modem_pins)
+
+    async def _reconfigure_port(self, update: PortSettingsUpdate) -> None:
+        assert self._serial is not None
+        await self._loop.run_in_executor(None, self._serial._reconfigure_port, update)
 
 
 def win32_list_serial_ports() -> list[SerialPortInfo]:

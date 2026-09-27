@@ -2,7 +2,7 @@
 
 import pytest
 
-from serialx import SerialException, async_serial_for_url
+from serialx import Parity, SerialException, StopBits, async_serial_for_url
 from tests.common import SerialPair, async_create_serial_pair
 
 
@@ -122,3 +122,20 @@ async def test_writelines_then_close_preserves_data(serial_pair: SerialPair) -> 
         await left.writelines([b"foo", b"bar", b"baz"])
         await left.close()
         assert await right.readexactly(9) == b"foobarbaz"
+
+
+async def test_reconfigure_port(serial_pair: SerialPair) -> None:
+    """`reconfigure_port` changes only the settings passed and keeps data flowing."""
+    async with async_create_serial_pair(
+        serial_pair.left, serial_pair.right, baudrate=115200
+    ) as (left, right):
+        await left.reconfigure_port(baudrate=9600, parity=Parity.EVEN)
+        await right.reconfigure_port(baudrate=9600, parity=Parity.EVEN)
+
+        assert left.baudrate == 9600
+        assert left.parity is Parity.EVEN
+        assert left.stopbits is StopBits.ONE
+        assert left.byte_size == 8
+
+        await left.write(b"hello")
+        assert await right.readexactly(5) == b"hello"

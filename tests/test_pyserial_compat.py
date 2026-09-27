@@ -27,6 +27,7 @@ from serialx import (
     Parity,
     PinState,
     Serial,
+    SerialException,
     SerialPortInfo,
 )
 from serialx.tools.list_ports import comports, grep
@@ -109,7 +110,8 @@ def test_compat_baudrate_setter(serial_pair: SerialPair) -> None:
     """Test that the deprecated .baudrate setter reconfigures the port."""
     with Serial.from_url(serial_pair.left, baudrate=9600) as s:
         assert s.baudrate == 9600
-        s.baudrate = 115200
+        with pytest.warns(DeprecationWarning, match="baudrate"):
+            s.baudrate = 115200
         assert s.baudrate == 115200
 
 
@@ -119,7 +121,8 @@ def test_compat_data_bits(serial_pair: SerialPair) -> None:
         assert s.data_bits == 7
         assert s.byte_size == 7
 
-        s.data_bits = 8
+        with pytest.warns(DeprecationWarning, match="data_bits"):
+            s.data_bits = 8
         assert s.data_bits == 8
         assert s.byte_size == 8
         assert s.bytesize == 8
@@ -131,16 +134,27 @@ def test_compat_stop_bits(serial_pair: SerialPair) -> None:
         assert s.stop_bits == 1
         assert s.stopbits.value == 1
 
-        s.stop_bits = 2
+        with pytest.warns(DeprecationWarning, match="stop_bits"):
+            s.stop_bits = 2
         assert s.stop_bits == 2
         assert s.stopbits.value == 2
 
+    # Not every backend supports 1.5 stop bits, so only store it
+    s = Serial()
+    with pytest.warns(DeprecationWarning, match="closed port"):
         s.stop_bits = 1.5
-        assert s.stop_bits == 1.5
-        assert s.stopbits.value == 1.5
+    assert s.stop_bits == 1.5
+    assert s.stopbits.value == 1.5
 
-        with pytest.raises(ValueError):
-            s.stop_bits = 3
+    with pytest.raises(ValueError):
+        s.stop_bits = 3
+
+
+def test_reconfigure_port_closed_raises() -> None:
+    """Settings for a closed port belong in the constructor."""
+    s = Serial()
+    with pytest.raises(SerialException, match="closed port"):
+        s.reconfigure_port(baudrate=115200)
 
 
 def test_compat_no_arg_construction() -> None:

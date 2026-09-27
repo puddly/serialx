@@ -123,7 +123,7 @@ def test_termios_error_raised_as_os_error_bad_descriptor() -> None:
     # Pass bad file descriptor directly, _open() would raise ValueError
     serial = PosixSerial(fileno=1)
     with pytest.raises(OSError) as raised:
-        serial._configure_port()
+        serial.reconfigure_port()
 
     assert raised.value.errno is not None
     assert raised.value.strerror is not None

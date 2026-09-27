@@ -357,6 +357,8 @@ class DescriptorTransport(BaseSerialTransport):
         """Close the transport."""
         LOGGER.debug("Closing at the request of the application")
         self._mark_user_closed()
+        self._arm_close_timeout()
+
         if self._closing:
             if (
                 self._fileno is None

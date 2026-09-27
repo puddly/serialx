@@ -34,6 +34,7 @@ from ...common import (
     ModemPins,
     Parity,
     PinState,
+    PortSettingsUpdate,
     SerialException,
     StopBits,
     UnsupportedSetting,
@@ -89,7 +90,7 @@ class PyodideSerial(BaseSerial):
     def _open(self) -> None:
         raise NotImplementedError()
 
-    def _configure_port(self) -> None:
+    def _reconfigure_port(self, update: PortSettingsUpdate) -> None:
         raise NotImplementedError()
 
     def _close(self) -> None:
@@ -149,6 +150,12 @@ class PyodideSerialTransport(BaseSerialTransport):
             Passing ``xonxoff=True`` to :meth:`connect` is accepted for compatibility
             but is silently ignored; a warning is logged. Only hardware flow control
             (RTS/CTS) is honored.
+
+        .. warning::
+            The Web Serial API only accepts port settings on open, so
+            :meth:`reconfigure_port` closes and reopens the browser port. This drops
+            DTR and RTS, discards unread bytes in the browser's receive buffer, and
+            logs a warning. See :doc:`/how-to/pyodide`.
         """
         super().__init__(loop, protocol)
 
@@ -183,13 +190,6 @@ class PyodideSerialTransport(BaseSerialTransport):
         js_port: JsSerialPort | None = None,
         **kwargs: Any,
     ) -> None:
-        # It would be more correct to raise an exception here but software flow control
-        # is used by too many applications
-        if xonxoff:
-            _LOGGER.warning("WebSerial does not support software flow control")
-
-        flow_control: FlowControlType = "hardware" if rtscts else "none"
-
         self._serial = PyodideSerial(
             path=path,
             baudrate=baudrate,
@@ -200,6 +200,29 @@ class PyodideSerialTransport(BaseSerialTransport):
             byte_size=byte_size,
             **kwargs,
         )
+
+        port = js_port if js_port is not None else _REGISTERED_JS_PORTS.get(path)
+
+        if port is None:
+            raise SerialException(
+                f"No JS serial port registered for {path!r}; call "
+                f"`register_js_port(path, js_port)` or pass `js_port=` to `connect`"
+            )
+
+        self._js_port = port
+        await self._open_js_port()
+        self._call_protocol_connection_made()
+
+    async def _open_js_port(self) -> None:
+        """Open the JS port with the current settings and start the stream loops."""
+        assert self._js_port is not None
+
+        # It would be more correct to raise an exception here but software flow control
+        # is used by too many applications
+        if self._serial._xonxoff:
+            _LOGGER.warning("WebSerial does not support software flow control")
+
+        flow_control: FlowControlType = "hardware" if self._serial._rtscts else "none"
 
         if self._serial.stopbits not in _STOPBITS_MAP:
             raise UnsupportedSetting(
@@ -212,31 +235,22 @@ class PyodideSerialTransport(BaseSerialTransport):
             )
 
         data_bits: DataBits
-        if byte_size == 7:
+        if self._serial.byte_size == 7:
             data_bits = 7
-        elif byte_size == 8:
+        elif self._serial.byte_size == 8:
             data_bits = 8
         else:
-            raise UnsupportedSetting(f"Unsupported byte_size: {byte_size!r}")
-
-        port = js_port if js_port is not None else _REGISTERED_JS_PORTS.get(path)
-
-        if port is None:
-            raise SerialException(
-                f"No JS serial port registered for {path!r}; call "
-                f"`register_js_port(path, js_port)` or pass `js_port=` to `connect`"
+            raise UnsupportedSetting(
+                f"Unsupported byte_size: {self._serial.byte_size!r}"
             )
 
-        await port.open(
+        await self._js_port.open(
             baudRate=self._serial.baudrate,
             dataBits=data_bits,
             flowControl=flow_control,
             parity=_PARITY_MAP[self._serial.parity],
             stopBits=_STOPBITS_MAP[self._serial.stopbits],
         )
-
-        self._js_port = port
-        assert self._js_port is not None
 
         await self.set_modem_pins(
             rts=self._serial.rts_on_open,
@@ -254,7 +268,48 @@ class PyodideSerialTransport(BaseSerialTransport):
         self._reader_task = self._loop.create_task(self._reader_loop())
         self._writer_task = self._loop.create_task(self._writer_loop())
 
-        self._call_protocol_connection_made()
+    async def _reconfigure_port(self, update: PortSettingsUpdate) -> None:
+        """Reopen the JS port, since Web Serial only accepts settings on open."""
+        assert self._js_port is not None
+        _LOGGER.warning(
+            "WebSerial cannot reconfigure an open port, closing and reopening it: %s",
+            update,
+        )
+
+        await self._drain_writer()
+
+        if self._reader_task is not None:
+            self._reader_task.cancel()
+
+        if self._js_reader is not None:
+            self._js_reader.releaseLock()
+            self._js_reader = None
+
+        if self._reader_task is not None:
+            with contextlib.suppress(BaseException):
+                await self._reader_task
+
+        await self._js_port.close()
+        await self._open_js_port()
+
+    async def _drain_writer(self) -> None:
+        """Let queued writes finish, then release the JS writer."""
+        if self._writer_task is not None and not self._writer_task.done():
+            try:
+                async with asyncio.timeout(self._serial.close_timeout):  # type: ignore[attr-defined,unused-ignore]
+                    _LOGGER.debug("Waiting for pending writes to finish")
+                    self._write_queue.put_nowait(ExitSentinel)
+                    await self._writer_task
+            except (asyncio.TimeoutError, asyncio.CancelledError):
+                _LOGGER.debug("Write task did not drain cleanly; cancelling")
+                if not self._writer_task.done():
+                    self._writer_task.cancel()
+                with contextlib.suppress(BaseException):
+                    await self._writer_task
+
+        if self._js_writer is not None:
+            self._js_writer.releaseLock()
+            self._js_writer = None
 
     async def _writer_loop(self) -> None:
         while True:
@@ -350,22 +405,7 @@ class PyodideSerialTransport(BaseSerialTransport):
 
     async def _close_port(self, exception: Exception | None) -> None:
         # Drain pending writes, unless abort() already cancelled the writer.
-        if self._writer_task is not None and not self._writer_task.done():
-            try:
-                async with asyncio.timeout(self._serial.write_timeout):  # type: ignore[attr-defined,unused-ignore]
-                    _LOGGER.debug("Waiting for pending writes to finish")
-                    self._write_queue.put_nowait(ExitSentinel)
-                    await self._writer_task
-            except (asyncio.TimeoutError, asyncio.CancelledError):
-                _LOGGER.debug("Write task did not drain cleanly; cancelling")
-                if not self._writer_task.done():
-                    self._writer_task.cancel()
-                with contextlib.suppress(BaseException):
-                    await self._writer_task
-
-        if self._js_writer is not None:
-            self._js_writer.releaseLock()
-            self._js_writer = None
+        await self._drain_writer()
 
         if self._js_port is not None:
             with contextlib.suppress(Exception):
@@ -405,6 +445,7 @@ class PyodideSerialTransport(BaseSerialTransport):
 
     def close(self) -> None:
         """Close the transport."""
+        self._arm_close_timeout()
         self._cleanup(None)
 
 

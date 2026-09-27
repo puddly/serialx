@@ -433,6 +433,47 @@ def test_sync_rtscts_setting(serial_pair: SerialPair, rtscts: bool) -> None:
             left.write(b"test")
 
 
+def test_sync_reconfigure_flow_control(serial_pair: SerialPair) -> None:
+    """Test that flow control can be switched on an open port."""
+    if serial_pair.uri_scheme == "posix://":
+        pytest.xfail("Strict POSIX backend does not support RTS/CTS flow control")
+
+    if SerialBackend.ESPHOME_HOST in serial_pair.backends:
+        pytest.xfail("ESPHome host does not support RTS/CTS flow control")
+
+    # Open both sides: on com0com, opening right asserts DTR which raises CTS on left
+    with Serial.from_url(serial_pair.right, baudrate=9600) as right:
+        with Serial.from_url(serial_pair.left, baudrate=9600) as left:
+            left.write(b"before")
+            assert right.readexactly(6) == b"before"
+
+            left.reconfigure_port(rtscts=True, xonxoff=False, dsrdtr=False)
+
+            left.write(b"after")
+            assert right.readexactly(5) == b"after"
+
+
+@pytest.mark.skip_quirks(SerialQuirk.NO_RTS_CTS, SerialQuirk.NO_WRITE_TIMEOUT)
+def test_sync_reconfigure_rtscts_holds_writes(serial_pair: SerialPair) -> None:
+    """Test that enabling RTS/CTS on an open port makes a held CTS line stall writes."""
+    with Serial.from_url(serial_pair.right, baudrate=115200) as right:
+        right.set_modem_pins(rts=False)
+        time.sleep(serial_pair.modem_line_propagation_delay)
+
+        with Serial.from_url(
+            serial_pair.left, baudrate=115200, write_timeout=0.5
+        ) as left:
+            left.write(b"x" * 1024)
+
+            left.reconfigure_port(rtscts=True)
+
+            with measure_time() as elapsed:
+                with pytest.raises(TimeoutError):
+                    left.write(b"x" * 1024)
+
+            assert 0.3 <= elapsed() <= 1.2
+
+
 @pytest.mark.skip_quirks(SerialQuirk.NO_EXCLUSIVITY)
 def test_sync_exclusive(serial_pair: SerialPair) -> None:
     """Test that exclusive setting is respected."""

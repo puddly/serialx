@@ -76,6 +76,7 @@ class SerialQuirk(str, enum.Enum):
     NO_PAUSE_WRITING_CALLBACKS = "no-pause-writing-callbacks"
     NO_EXCLUSIVITY = "no-exclusivity"
     NO_GRACEFUL_PEER_CLOSE = "no-graceful-peer-close"
+    NO_WRITE_BUFFERING = "no-write-buffering"
 
 
 SERIAL_PAIR_DEFAULT_QUIRKS: dict[SerialBackend, frozenset[SerialQuirk]] = {
@@ -97,6 +98,7 @@ SERIAL_PAIR_DEFAULT_QUIRKS: dict[SerialBackend, frozenset[SerialQuirk]] = {
             SerialQuirk.NO_NUM_UNREAD_BYTES,
             SerialQuirk.NO_PAUSE_WRITING_CALLBACKS,
             SerialQuirk.NO_EXCLUSIVITY,
+            SerialQuirk.NO_WRITE_BUFFERING,
         }
     ),
     SerialBackend.ESPHOME: frozenset(
@@ -105,6 +107,7 @@ SERIAL_PAIR_DEFAULT_QUIRKS: dict[SerialBackend, frozenset[SerialQuirk]] = {
             SerialQuirk.NO_RESET_WRITE_BUFFER,
             SerialQuirk.NO_WRITE_TIMEOUT,
             SerialQuirk.NO_EXCLUSIVITY,
+            SerialQuirk.NO_WRITE_BUFFERING,
             # ESPHome has no orderly API close at runtime, so a dropped
             # connection is always abrupt
             SerialQuirk.NO_GRACEFUL_PEER_CLOSE,
@@ -120,6 +123,7 @@ SERIAL_PAIR_DEFAULT_QUIRKS: dict[SerialBackend, frozenset[SerialQuirk]] = {
             SerialQuirk.NO_RTS_CTS,
             SerialQuirk.NO_EXCLUSIVITY,
             SerialQuirk.NO_GRACEFUL_PEER_CLOSE,
+            SerialQuirk.NO_WRITE_BUFFERING,
         }
     ),
     SerialBackend.RFC2217: frozenset(
@@ -130,6 +134,7 @@ SERIAL_PAIR_DEFAULT_QUIRKS: dict[SerialBackend, frozenset[SerialQuirk]] = {
             SerialQuirk.NO_WRITE_TIMEOUT,
             SerialQuirk.NO_PAUSE_WRITING_CALLBACKS,
             SerialQuirk.NO_EXCLUSIVITY,
+            SerialQuirk.NO_WRITE_BUFFERING,
         }
     ),
     SerialBackend.SER2NET: frozenset({}),
