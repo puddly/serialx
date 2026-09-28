@@ -21,6 +21,7 @@ import urllib.parse
 import warnings
 
 from aioesphomeapi.model import (
+    APIVersion,
     DeviceInfo,
     SerialProxyIdentity,
     SerialProxyIdentityFlag,
@@ -361,9 +362,9 @@ def _expected_esphome_ports(netloc: str) -> list[SerialPortInfo]:
             resolved_device=f"esphome://{netloc}/?port_name=Serial+Proxy+Left",
             vid=None,
             pid=None,
-            serial_number="98:35:69:AB:F6:79",
-            manufacturer="Host",
-            product="host",
+            serial_number=None,
+            manufacturer=None,
+            product=None,
             bcd_device=None,
             interface_description="Serial Proxy Left",
             interface_num=None,
@@ -373,9 +374,9 @@ def _expected_esphome_ports(netloc: str) -> list[SerialPortInfo]:
             resolved_device=f"esphome://{netloc}/?port_name=Serial+Proxy+Right",
             vid=None,
             pid=None,
-            serial_number="98:35:69:AB:F6:79",
-            manufacturer="Host",
-            product="host",
+            serial_number=None,
+            manufacturer=None,
+            product=None,
             bcd_device=None,
             interface_description="Serial Proxy Right",
             interface_num=None,
@@ -964,17 +965,21 @@ async def test_port_matcher_mismatch_is_rejected(name: str, value: str | int) ->
     assert proxy_calls(api) == [call.subscribe_serial_proxy_data(ANY)]
 
 
-async def test_port_usb_matcher_rejects_configured_identity() -> None:
-    """A configured identity has an all-zero descriptor, which `port_usb_*` must not match."""
+@pytest.mark.parametrize(
+    "usb",
+    [
+        UsbDeviceDescriptor(),
+        UsbDeviceDescriptor(vendor_id=0x303A),  # type:ignore[call-arg]
+        UsbDeviceDescriptor(product_id=0x4001),  # type:ignore[call-arg]
+    ],
+)
+async def test_port_usb_matcher_rejects_missing_usb_ids(
+    usb: UsbDeviceDescriptor,
+) -> None:
+    """A zero ID means no USB metadata, which `port_usb_*` must not match."""
     api = mock_api_client("Zigbee")
     api.attach_mock(
-        AsyncMock(
-            return_value=_identity(
-                source=SerialProxyIdentitySource.CONFIGURED,
-                usb=UsbDeviceDescriptor(),
-            )
-        ),
-        "serial_proxy_get_identity",
+        AsyncMock(return_value=_identity(usb=usb)), "serial_proxy_get_identity"
     )
     url = "esphome://127.0.0.1:6053/?port_name=Zigbee&port_usb_interface_num=0"
 
@@ -982,6 +987,153 @@ async def test_port_usb_matcher_rejects_configured_identity() -> None:
         with pytest.raises(SerialException, match="no USB descriptor"):
             async with async_serial_for_url(url=url, baudrate=115200):
                 pass
+
+
+async def test_port_usb_matcher_accepts_configured_identity() -> None:
+    """A port that is not USB can still carry USB metadata to match against."""
+    api = mock_api_client("Zigbee")
+    api.attach_mock(
+        AsyncMock(return_value=_identity(source=SerialProxyIdentitySource.CONFIGURED)),
+        "serial_proxy_get_identity",
+    )
+    url = "esphome://127.0.0.1:6053/?port_name=Zigbee&port_usb_vid=0x303A"
+
+    with patch("serialx.platforms.serial_esphome.APIClient", return_value=api):
+        async with async_serial_for_url(url=url, baudrate=115200):
+            pass
+
+
+async def test_list_serial_ports_reports_identity() -> None:
+    """Each port lists what its identity says is attached, and nothing it cannot know."""
+    api = mock_api_client(
+        "USB", "Configured", "Empty", "Unreadable", "None", "Mimic", "Partial"
+    )
+    api.api_version = APIVersion(1, 18)
+    identities = [
+        _identity(instance=0),
+        _identity(
+            instance=1,
+            source=SerialProxyIdentitySource.CONFIGURED,
+            serial_number="",
+            usb=UsbDeviceDescriptor(),
+        ),
+        _identity(instance=2, flags=0),
+        _identity(
+            instance=3,
+            flags=SerialProxyIdentityFlag.CONNECTED | SerialProxyIdentityFlag.ERROR,
+        ),
+        _identity(instance=4, source=SerialProxyIdentitySource.NONE),
+        _identity(instance=5, source=SerialProxyIdentitySource.CONFIGURED),
+        _identity(
+            instance=6,
+            serial_number="",
+            usb=UsbDeviceDescriptor(vendor_id=0x303A),  # type:ignore[call-arg]
+        ),
+    ]
+    api.attach_mock(
+        AsyncMock(side_effect=lambda instance, timeout: identities[instance]),
+        "serial_proxy_get_identity",
+    )
+
+    ports = await async_list_serial_ports(Platform.ESPHOME, api=api)
+
+    base = "esphome://127.0.0.1:6053/?port_name="
+    empty = {
+        "vid": None,
+        "pid": None,
+        "serial_number": None,
+        "manufacturer": None,
+        "product": None,
+        "bcd_device": None,
+        "interface_num": None,
+    }
+    assert ports == [
+        SerialPortInfo(
+            device=f"{base}USB&port_serial_number=AABBCCDDEEFF",
+            resolved_device=f"{base}USB&port_serial_number=AABBCCDDEEFF",
+            vid=0x303A,
+            pid=0x4001,
+            serial_number="AABBCCDDEEFF",
+            manufacturer="Nabu Casa",
+            product="ZBT-2",
+            bcd_device=0x0101,
+            interface_description="USB",
+            interface_num=0,
+        ),
+        SerialPortInfo(
+            device=f"{base}Configured",
+            resolved_device=f"{base}Configured",
+            vid=None,
+            pid=None,
+            serial_number=None,
+            manufacturer="Nabu Casa",
+            product="ZBT-2",
+            bcd_device=None,
+            interface_description="Configured",
+            interface_num=None,
+        ),
+        *(
+            SerialPortInfo(
+                device=f"{base}{name}",
+                resolved_device=f"{base}{name}",
+                interface_description=name,
+                **empty,
+            )
+            for name in ("Empty", "Unreadable", "None")
+        ),
+        SerialPortInfo(
+            device=f"{base}Mimic&port_serial_number=AABBCCDDEEFF",
+            resolved_device=f"{base}Mimic&port_serial_number=AABBCCDDEEFF",
+            vid=0x303A,
+            pid=0x4001,
+            serial_number="AABBCCDDEEFF",
+            manufacturer="Nabu Casa",
+            product="ZBT-2",
+            bcd_device=0x0101,
+            interface_description="Mimic",
+            interface_num=0,
+        ),
+        SerialPortInfo(
+            device=f"{base}Partial",
+            resolved_device=f"{base}Partial",
+            vid=None,
+            pid=None,
+            serial_number=None,
+            manufacturer="Nabu Casa",
+            product="ZBT-2",
+            bcd_device=None,
+            interface_description="Partial",
+            interface_num=None,
+        ),
+    ]
+    assert api.serial_proxy_get_identity.mock_calls == [
+        call(instance, timeout=10.0) for instance in range(7)
+    ]
+
+
+async def test_list_serial_ports_skips_identity_on_old_api() -> None:
+    """A device below API 1.18 never answers, so it is not asked."""
+    api = mock_api_client("Zigbee")
+    api.attach_mock(AsyncMock(), "serial_proxy_get_identity")
+
+    ports = await async_list_serial_ports(Platform.ESPHOME, api=api)
+
+    url = "esphome://127.0.0.1:6053/?port_name=Zigbee"
+    assert ports == [
+        SerialPortInfo(
+            device=url,
+            resolved_device=url,
+            vid=None,
+            pid=None,
+            serial_number=None,
+            manufacturer=None,
+            product=None,
+            bcd_device=None,
+            interface_description="Zigbee",
+            interface_num=None,
+        )
+    ]
+    assert len(api.serial_proxy_get_identity.mock_calls) == 0
 
 
 def _identity_handlers(api: MagicMock) -> list[Callable[[SerialProxyIdentity], None]]:

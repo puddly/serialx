@@ -43,6 +43,7 @@ from aioesphomeapi.core import (  # type: ignore[attr-defined]
     TimeoutAPIError,
 )
 from aioesphomeapi.model import (
+    APIVersion,
     ConnectionClosedEvent,
     DisconnectReason,
     SerialProxyDataReceived,
@@ -76,6 +77,9 @@ _S = TypeVar("_S", bound="SerialProxyRequestResponse | None")
 _P = ParamSpec("_P")
 
 LOGGER = logging.getLogger(__name__)
+
+# Identity arrived in API 1.18. Earlier devices never answer an identity request.
+MIN_VERSION_SERIAL_PROXY_IDENTITY = APIVersion(1, 18)
 
 ESPHOME_DEFAULT_PORT = 6053
 
@@ -129,7 +133,6 @@ MODE_MAP = {
     SerialProxyModeName.PROTOCOL: SerialProxyMode.PROTOCOL,
 }
 
-
 # Matchers on the device behind a port, and where each is read from its identity
 PORT_MATCHERS: dict[str, Callable[[SerialProxyIdentity], str | int]] = {
     "port_manufacturer": attrgetter("manufacturer"),
@@ -141,7 +144,8 @@ PORT_MATCHERS: dict[str, Callable[[SerialProxyIdentity], str | int]] = {
     "port_usb_interface_num": attrgetter("usb.interface_number"),
 }
 
-# The descriptor is all zero unless the identity comes from USB, so these also require it
+# Any source can carry USB metadata, but a zero ID means it carries none, so these also
+# require both IDs to be set
 USB_PORT_MATCHERS = frozenset(
     name for name in PORT_MATCHERS if name.startswith("port_usb_")
 )
@@ -249,8 +253,8 @@ class ESPHomeSerial(BaseSerial):
             port_product: Product the device behind the port must report.
             port_serial_number: Serial number the device behind the port must report.
             port_usb_vid: USB vendor ID the device behind the port must report. Any
-                `port_usb_*` matcher also requires the device to be identified over
-                USB.
+                `port_usb_*` matcher also requires the port to report a non-zero USB
+                vendor and product ID.
             port_usb_pid: USB product ID the device behind the port must report.
             port_usb_bcd_device: USB device release number the device behind the port
                 must report.
@@ -464,9 +468,8 @@ class ESPHomeSerial(BaseSerial):
 
     def _port_mismatch(self, identity: SerialProxyIdentity) -> str | None:
         """Describe how a connected device fails the matchers, if it does."""
-        if (
-            identity.source is not SerialProxyIdentitySource.USB
-            and self._port_matchers.keys() & USB_PORT_MATCHERS
+        if self._port_matchers.keys() & USB_PORT_MATCHERS and not (
+            identity.usb.vendor_id and identity.usb.product_id
         ):
             return "no USB descriptor"
 
@@ -611,16 +614,59 @@ class ESPHomeSerial(BaseSerial):
         assert self._api is not None
 
         device_info = await self._call_on_client_loop(self._api.device_info())
+        version = self._api.api_version
+        has_identity = (
+            version is not None and version >= MIN_VERSION_SERIAL_PROXY_IDENTITY
+        )
         ports = []
 
-        for proxy in device_info.serial_proxies:
+        for instance, proxy in enumerate(device_info.serial_proxies):
+            serial_number: str | None = None
+            manufacturer: str | None = None
+            product: str | None = None
+            vid: int | None = None
+            pid: int | None = None
+            bcd_device: int | None = None
+            interface_num: int | None = None
+
+            if has_identity:
+                identity = await self._call_on_client_loop(
+                    self._api.serial_proxy_get_identity(
+                        instance, timeout=self._connect_timeout
+                    )
+                )
+
+                # Only a connected device with readable descriptors says what is there
+                usable = (
+                    identity.source is not SerialProxyIdentitySource.NONE
+                    and identity.flags & SerialProxyIdentityFlag.CONNECTED
+                    and not identity.flags & SerialProxyIdentityFlag.ERROR
+                )
+
+                if usable:
+                    serial_number = identity.serial_number or None
+                    manufacturer = identity.manufacturer or None
+                    product = identity.product or None
+
+                # Any source can carry USB metadata, but a zero ID means it carries none
+                if usable and identity.usb.vendor_id and identity.usb.product_id:
+                    vid = identity.usb.vendor_id
+                    pid = identity.usb.product_id
+                    bcd_device = identity.usb.bcd_device
+                    interface_num = identity.usb.interface_number
+
+            # Opening a listed port only succeeds with the same device still attached
+            query = {"port_name": proxy.name}
+            if serial_number is not None:
+                query["port_serial_number"] = serial_number
+
             url = urllib.parse.urlunparse(
                 urllib.parse.ParseResult(
                     scheme="esphome",
                     netloc=f"{self._api.address}:{self._api.port}",
                     path="/",
                     params="",
-                    query=urllib.parse.urlencode({"port_name": proxy.name}),
+                    query=urllib.parse.urlencode(query),
                     fragment="",
                 )
             )
@@ -629,14 +675,14 @@ class ESPHomeSerial(BaseSerial):
                 SerialPortInfo(
                     device=url,
                     resolved_device=url,
-                    vid=None,
-                    pid=None,
-                    serial_number=device_info.mac_address,
-                    manufacturer=device_info.manufacturer,
-                    product=device_info.model,
-                    bcd_device=None,
+                    vid=vid,
+                    pid=pid,
+                    serial_number=serial_number,
+                    manufacturer=manufacturer,
+                    product=product,
+                    bcd_device=bcd_device,
                     interface_description=proxy.name,
-                    interface_num=None,
+                    interface_num=interface_num,
                 )
             )
 
