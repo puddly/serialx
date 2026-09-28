@@ -29,6 +29,7 @@ from enum import Enum, IntFlag
 import errno
 import functools
 import logging
+from operator import attrgetter
 import threading
 from typing import Any, ParamSpec, TypeVar, cast
 import urllib.parse
@@ -129,6 +130,23 @@ MODE_MAP = {
 }
 
 
+# Matchers on the device behind a port, and where each is read from its identity
+PORT_MATCHERS: dict[str, Callable[[SerialProxyIdentity], str | int]] = {
+    "port_manufacturer": attrgetter("manufacturer"),
+    "port_product": attrgetter("product"),
+    "port_serial_number": attrgetter("serial_number"),
+    "port_usb_vid": attrgetter("usb.vendor_id"),
+    "port_usb_pid": attrgetter("usb.product_id"),
+    "port_usb_bcd_device": attrgetter("usb.bcd_device"),
+    "port_usb_interface_num": attrgetter("usb.interface_number"),
+}
+
+# The descriptor is all zero unless the identity comes from USB, so these also require it
+USB_PORT_MATCHERS = frozenset(
+    name for name in PORT_MATCHERS if name.startswith("port_usb_")
+)
+
+
 def parse_serial_proxy_mode(value: SerialProxyModeName | str) -> SerialProxyModeName:
     """Parse a serial proxy mode name, rejecting unknown values."""
     try:
@@ -197,7 +215,13 @@ class ESPHomeSerial(BaseSerial):
         port_name: str | None = None,
         port_instance: int | None = None,
         mode: SerialProxyModeName | str = SerialProxyModeName.RAW,
-        serial_number: str | None = None,
+        port_manufacturer: str | None = None,
+        port_product: str | None = None,
+        port_serial_number: str | None = None,
+        port_usb_vid: int | None = None,
+        port_usb_pid: int | None = None,
+        port_usb_bcd_device: int | None = None,
+        port_usb_interface_num: int | None = None,
         key: str | None = None,
         password: str | None = None,
         noise_psk: str | None = None,
@@ -216,10 +240,21 @@ class ESPHomeSerial(BaseSerial):
                 be skipped and the API will not be disconnected once the serial object
                 is closed.
             port_name: The `name` attribute of the ESPHome serial proxy to connect to.
-            serial_number: Serial number the device behind the port must report. A
-                port is a socket, so without this the connection succeeds against
-                whatever happens to be plugged in. Also read from a ``serial_number``
-                query parameter.
+            port_manufacturer: Manufacturer the device behind the port must report.
+                A port is a socket, so without any of the matchers below the
+                connection succeeds against whatever happens to be plugged in. Every
+                matcher given must match, both when opening and for as long as the
+                port stays open. All are also read from query parameters of the same
+                name, integers with `int(value, 0)`.
+            port_product: Product the device behind the port must report.
+            port_serial_number: Serial number the device behind the port must report.
+            port_usb_vid: USB vendor ID the device behind the port must report. Any
+                `port_usb_*` matcher also requires the device to be identified over
+                USB.
+            port_usb_pid: USB product ID the device behind the port must report.
+            port_usb_bcd_device: USB device release number the device behind the port
+                must report.
+            port_usb_interface_num: USB interface number the port must be bound to.
             port_instance: The numerical instance ID of the ESPHome serial proxy
                 instance to connect to.
 
@@ -251,14 +286,27 @@ class ESPHomeSerial(BaseSerial):
             api.loop if api is not None else None
         )
         self._port_name: str | None = port_name
-        # When set, the port must have this exact device attached or the claim is refused
         # What the device says about the resolved port, known once it has been resolved
         self._port_info: SerialProxyInfo | None = None
         self._instance_id: int | None = port_instance
         self._mode: SerialProxyModeName = parse_serial_proxy_mode(mode)
-        self._serial_number: str | None = serial_number
+        # The port must have a device attached that matches all of these, or the claim
+        # is refused and the session ends
+        self._port_matchers: dict[str, str | int] = {
+            name: value
+            for name, value in {
+                "port_manufacturer": port_manufacturer,
+                "port_product": port_product,
+                "port_serial_number": port_serial_number,
+                "port_usb_vid": port_usb_vid,
+                "port_usb_pid": port_usb_pid,
+                "port_usb_bcd_device": port_usb_bcd_device,
+                "port_usb_interface_num": port_usb_interface_num,
+            }.items()
+            if value is not None
+        }
         self._active_mode: SerialProxyModeName | None = None
-        self._serial_number_checked: bool = False
+        self._port_checked: bool = False
         self._password: str | None = password
         self._noise_psk: str | None = key or noise_psk
         self._disconnect_api: bool = False
@@ -404,15 +452,28 @@ class ESPHomeSerial(BaseSerial):
                 errno.ENXIO, f"Device removed from serial proxy {self._port_name!r}"
             )
 
-        if (
-            self._serial_number is not None
-            and identity.serial_number != self._serial_number
-        ):
+        mismatch = self._port_mismatch(identity)
+        if mismatch is not None:
             return OSError(
                 errno.ENXIO,
-                f"Serial proxy {self._port_name!r} now has device"
-                f" {identity.serial_number!r} attached, expected {self._serial_number!r}",
+                f"Serial proxy {self._port_name!r} now has a device attached with"
+                f" {mismatch}",
             )
+
+        return None
+
+    def _port_mismatch(self, identity: SerialProxyIdentity) -> str | None:
+        """Describe how a connected device fails the matchers, if it does."""
+        if (
+            identity.source is not SerialProxyIdentitySource.USB
+            and self._port_matchers.keys() & USB_PORT_MATCHERS
+        ):
+            return "no USB descriptor"
+
+        for name, expected in self._port_matchers.items():
+            actual = PORT_MATCHERS[name](identity)
+            if actual != expected:
+                return f"{name}={actual!r}, expected {expected!r}"
 
         return None
 
@@ -481,8 +542,14 @@ class ESPHomeSerial(BaseSerial):
             elif not self._port_name:
                 self._port_name = port_value
 
-            if "serial_number" in params:
-                self._serial_number = params["serial_number"][0]
+            for name in PORT_MATCHERS:
+                if name not in params:
+                    continue
+
+                value = params[name][0]
+                self._port_matchers[name] = (
+                    int(value, 0) if name in USB_PORT_MATCHERS else value
+                )
 
             if "mode" in params:
                 self._mode = parse_serial_proxy_mode(params["mode"][0])
@@ -521,7 +588,7 @@ class ESPHomeSerial(BaseSerial):
                 self._register_closed_handler()
             )
 
-        # Before the port is resolved and its serial number checked, so a device pulled in
+        # Before the port is resolved and its device checked, so a device pulled in
         # between is not missed. The device only reports identity changes to a client that
         # subscribed, and subscribing is what this registration does.
         if self._identity_unsub is None:
@@ -619,9 +686,9 @@ class ESPHomeSerial(BaseSerial):
             await self._resolve_instance_id_from_name()
 
         # Also reached when `port_instance` skipped the lookup above
-        if self._serial_number is not None and not self._serial_number_checked:
-            self._serial_number_checked = True
-            await self._check_serial_number()
+        if self._port_matchers and not self._port_checked:
+            self._port_checked = True
+            await self._check_port_device()
 
     async def _resolve_instance_id_from_name(self) -> None:
         """Look `_instance_id` up by `_port_name`."""
@@ -644,8 +711,8 @@ class ESPHomeSerial(BaseSerial):
         self._instance_id = instance_id
         self._port_info = proxy_info
 
-    async def _check_serial_number(self) -> None:
-        """Fail unless the device behind the port reports the expected serial number."""
+    async def _check_port_device(self) -> None:
+        """Fail unless the device behind the port matches every matcher."""
         assert self._api is not None
         assert self._instance_id is not None
 
@@ -655,8 +722,8 @@ class ESPHomeSerial(BaseSerial):
 
         if identity.source is SerialProxyIdentitySource.NONE:
             raise SerialException(
-                f"Serial proxy {self._port_name!r} reports no identity to check the"
-                " serial number against"
+                f"Serial proxy {self._port_name!r} reports no identity to match the"
+                " device against"
             )
 
         if identity.flags & SerialProxyIdentityFlag.ERROR:
@@ -670,11 +737,11 @@ class ESPHomeSerial(BaseSerial):
                 f"No device is attached to serial proxy {self._port_name!r}"
             )
 
-        if identity.serial_number != self._serial_number:
+        mismatch = self._port_mismatch(identity)
+        if mismatch is not None:
             raise SerialException(
-                f"Serial proxy {self._port_name!r} has device"
-                f" {identity.serial_number!r} attached, expected"
-                f" {self._serial_number!r}"
+                f"Serial proxy {self._port_name!r} has a device attached with"
+                f" {mismatch}"
             )
 
     async def _subscribe_instance(self) -> None:
