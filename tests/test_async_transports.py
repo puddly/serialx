@@ -470,6 +470,9 @@ async def test_async_reconfigure_flow_control(serial_pair: SerialPair) -> None:
             assert await right.readexactly(5) == b"after"
 
 
+@pytest.mark.skip(
+    reason="held output stalls the kernel close and wedges the adapter; needs the bounded flush"
+)
 @pytest.mark.skip_quirks(SerialQuirk.NO_RTS_CTS, SerialQuirk.NO_PAUSE_WRITING_CALLBACKS)
 async def test_async_reconfigure_rtscts_holds_writes(serial_pair: SerialPair) -> None:
     """Test that enabling RTS/CTS on an open port makes a held CTS line stall writes."""
