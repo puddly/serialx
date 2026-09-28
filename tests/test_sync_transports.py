@@ -477,6 +477,9 @@ def test_sync_reconfigure_rtscts_holds_writes(serial_pair: SerialPair) -> None:
 
             assert 0.3 <= elapsed() <= 1.2
 
+            # Let the held bytes drain, or closing the port waits on them
+            right.set_modem_pins(rts=True)
+
 
 @pytest.mark.skip_quirks(SerialQuirk.NO_EXCLUSIVITY)
 def test_sync_exclusive(serial_pair: SerialPair) -> None:
@@ -1335,3 +1338,6 @@ def test_write_timeout_cts_held(serial_pair: SerialPair) -> None:
                     left.write(b"x" * 1024)
 
             assert 0.3 <= elapsed() <= 1.2
+
+            # Let the held bytes drain, or closing the port waits on them
+            right.set_modem_pins(rts=True)

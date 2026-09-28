@@ -494,6 +494,9 @@ async def test_async_reconfigure_rtscts_holds_writes(serial_pair: SerialPair) ->
                     await left.write(b"x" * 1024)
                     await left.flush()
 
+            # Let the held bytes drain, or closing the port waits on them
+            await right.set_modem_pins(rts=True)
+
 
 # --- Lifecycle ---
 
