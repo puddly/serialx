@@ -73,6 +73,10 @@ def pytest_configure(config: pytest.Config) -> None:
         "markers",
         "skip_quirks(*quirks): skip test when serial_pair exposes any listed quirk",
     )
+    config.addinivalue_line(
+        "markers",
+        "esphome_api(major, minor): skip when --esphome-api-version is older than this",
+    )
 
 
 def pytest_addoption(parser: pytest.Parser) -> None:
@@ -88,6 +92,49 @@ def pytest_addoption(parser: pytest.Parser) -> None:
             "rfc2217://127.0.0.1:5002,no-write-timeout)"
         ),
     )
+    parser.addoption(
+        "--esphome-api-version",
+        default=None,
+        help="API version the ESPHome host daemon is expected to report (e.g. 1.16)",
+    )
+
+
+def parse_esphome_api_version(config: pytest.Config) -> tuple[int, int] | None:
+    """Return the expected ESPHome API version from `--esphome-api-version`, if any."""
+    value = config.getoption("--esphome-api-version")
+    if value is None:
+        return None
+
+    major, minor = value.split(".")
+    return int(major), int(minor)
+
+
+def pytest_collection_modifyitems(
+    config: pytest.Config, items: list[pytest.Item]
+) -> None:
+    """Skip tests marked `esphome_api` above the expected daemon API version."""
+    expected = parse_esphome_api_version(config)
+    if expected is None:
+        return
+
+    for item in items:
+        marker = item.get_closest_marker("esphome_api")
+        if marker is not None and tuple(marker.args) > expected:
+            item.add_marker(
+                pytest.mark.skip(
+                    reason=f"needs ESPHome API {marker.args}, have {expected}"
+                )
+            )
+
+
+@pytest.fixture
+def esphome_api_version(request: pytest.FixtureRequest) -> tuple[int, int]:
+    """Return the API version the ESPHome host daemon is expected to report."""
+    expected = parse_esphome_api_version(request.config)
+    if expected is None:
+        pytest.skip("--esphome-api-version not given")
+
+    return expected
 
 
 def _get_endpoint_backend(path: str) -> SerialBackend:

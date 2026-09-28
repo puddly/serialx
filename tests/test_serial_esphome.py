@@ -169,6 +169,27 @@ def proxy_calls(api: MagicMock) -> list[object]:
 
 
 @pytest.mark.skipif(not ESPHOME_HOST_BINARY, reason="esphome host binary not available")
+async def test_host_daemon_api_version(esphome_api_version: tuple[int, int]) -> None:
+    """The daemon under test speaks the API version CI says it should."""
+    with create_socat_pair() as (socat_left, socat_right, _, _):
+        with create_esphome_pair(socat_left, socat_right) as (left, _right, _, _):
+            parsed = urllib.parse.urlparse(left)
+            assert parsed.hostname is not None
+
+            api = APIClient(
+                address=parsed.hostname,
+                port=parsed.port or ESPHOME_DEFAULT_PORT,
+                password=None,
+            )
+            await api.connect(login=True)
+
+            try:
+                assert api.api_version == APIVersion(*esphome_api_version)
+            finally:
+                await api.disconnect()
+
+
+@pytest.mark.skipif(not ESPHOME_HOST_BINARY, reason="esphome host binary not available")
 async def test_externally_passed_api() -> None:
     """Test passing an ESPHome API instance externally."""
     with create_socat_pair() as (socat_left, socat_right, _, _):
