@@ -273,7 +273,15 @@ def pytest_generate_tests(metafunc: pytest.Metafunc) -> None:
         # For POSIX, we should test base classes on platforms that extend them
         for uri_scheme in _get_forced_posix_uri_schemes():
             for adapter in adapters:
-                specs.append(dataclasses.replace(adapter, uri_scheme=uri_scheme))
+                quirks = adapter.quirks
+
+                # The generic POSIX backend rejects hardware flow control outright
+                if uri_scheme == "posix://":
+                    quirks |= {SerialQuirk.NO_RTS_CTS, SerialQuirk.NO_DTR_DSR}
+
+                specs.append(
+                    dataclasses.replace(adapter, uri_scheme=uri_scheme, quirks=quirks)
+                )
 
         # Build the pytest parameter groups to limit concurrency to underlying resources
         params = []
