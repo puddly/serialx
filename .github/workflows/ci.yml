@@ -364,7 +364,6 @@ jobs:
             -o console_output_style=count \
             -p no:sugar \
             --adapter-pair "$(sed -n 1p ports.txt),$(sed -n 2p ports.txt),no-reset-write-buffer" \
-            -k "not cts_held and not rtscts_holds_writes" \
             tests
       - name: Show emulator and kernel logs
         if: failure()
@@ -473,7 +472,7 @@ jobs:
             -p no:sugar \
             --esphome-api-version "$ESPHOME_API_VERSION" \
             --adapter-pair "$(sed -n 1p ports.txt),$(sed -n 2p ports.txt),no-reset-write-buffer" \
-            -k "esphome and not cts_held and not rtscts_holds_writes" \
+            -k "esphome" \
             tests
       - name: Show emulator and kernel logs
         if: failure()
