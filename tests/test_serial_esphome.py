@@ -149,7 +149,7 @@ def mock_api_client(*port_names: str) -> MagicMock:
         AsyncMock(return_value=None), "serial_proxy_subscribe_await_response"
     )
     api.attach_mock(
-        AsyncMock(return_value=SerialProxyRequestResponse(status=SerialProxyStatus.OK)),
+        AsyncMock(return_value=SerialProxyRequestResponse(status=SerialProxyStatus.OK)),  # type:ignore[call-arg]
         "serial_proxy_set_mode_await_response",
     )
     # Recent enough that the validated helper does not fall back to a flushing ping

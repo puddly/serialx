@@ -295,6 +295,7 @@ class AllConnectKwargs(_CommonConnectKwargs, total=False):
     # esphome://
     api: APIClient | None
     port_name: str | None
+    serial_number: str | None
     port_instance: int | None
     mode: str
     key: str | None

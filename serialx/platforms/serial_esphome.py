@@ -90,10 +90,12 @@ STOP_BITS_MAP = {
 }
 
 STATUS_TO_ERROR_MAP: dict[
-    SerialProxyStatus, None | Callable[[str], SerialException | OSError]
+    SerialProxyStatus | None,
+    Callable[[str], SerialException | OSError] | None,
 ] = {
     SerialProxyStatus.OK: None,
     SerialProxyStatus.ASSUMED_SUCCESS: None,
+    SerialProxyStatus.ERROR: lambda msg: SerialException(msg),  # noqa: PLW0108
     SerialProxyStatus.TIMEOUT: lambda msg: SerialException(
         f"Operation timed out: {msg}"
     ),
