@@ -314,6 +314,13 @@ def create_esphome_pair(
     """Create an esphome:// pair."""
     assert ESPHOME_HOST_BINARY is not None
 
+    # The daemon's host UART never flushes the port it opens, so bytes an earlier test
+    # left unread on a persistent device would be read back as the next test's data.
+    # serialx flushes both queues on open.
+    for tty in (left_tty, right_tty):
+        with serialx.Serial.from_url(tty, baudrate=115200):
+            pass
+
     env = os.environ.copy()
     env["SERIALX_UART_LEFT"] = left_tty
     env["SERIALX_UART_RIGHT"] = right_tty
