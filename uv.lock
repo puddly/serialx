@@ -1822,11 +1822,11 @@ wheels = [
 
 [[package]]
 name = "types-pywin32"
-version = "311.0.0.20260508"
+version = "312.0.0.20260928"
 source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/19/c7/38afbc42ec39aae3e70fe73c1ee6631feb8c4ac3db0496009c2e67fa5936/types_pywin32-311.0.0.20260508.tar.gz", hash = "sha256:143f6b19a036de630e28a196452f1da829573cd2dd64b7289ff86bb36c93d3d6", size = 332372, upload-time = "2026-05-08T04:50:06.683Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/cc/39/476d851d215ce19c3234bb726e1f6417f1b636723573d0c1351f138d93cc/types_pywin32-312.0.0.20260928.tar.gz", hash = "sha256:a06b6edb3dbeb3d6e9a3fada3e7fadbb97e9ae998d394ff3545efdd1090932c4", size = 357631, upload-time = "2026-09-28T07:50:48.206Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/f2/96/8a25f248165acc32e0e4246f72e30e075e6596dd6ff912968e962c421d49/types_pywin32-311.0.0.20260508-py3-none-any.whl", hash = "sha256:933063714b43dc7fbd86f28842ca3367e901f24d32795025e749568e56b84b2b", size = 395354, upload-time = "2026-05-08T04:50:05.375Z" },
+    { url = "https://files.pythonhosted.org/packages/20/e6/8c87f81a114cdb0abf4c9a55153b10e85eba7a4ef5292d4557cdcfc39f15/types_pywin32-312.0.0.20260928-py3-none-any.whl", hash = "sha256:173c0498ba0d6e3c02d05e96c999fbfbd89feef5ce2eae238ddbaac614aeb51a", size = 419382, upload-time = "2026-09-28T07:50:47.133Z" },
 ]
 
 [[package]]

@@ -439,7 +439,7 @@ class Win32Serial(BaseSerial):
         self._apply_commtimeouts(read_timeout=timeout)
         ResetEvent(self._overlapped_read.hEvent)
 
-        ReadFile(self._handle, b, self._overlapped_read)  # type:ignore[call-overload]
+        ReadFile(self._handle, b, self._overlapped_read)
 
         return GetOverlappedResult(self._handle, self._overlapped_read, True)
 
