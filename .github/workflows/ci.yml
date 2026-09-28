@@ -12,7 +12,8 @@ permissions:
   contents: read
 
 env:
-  ESPHOME_VERSION: "2026.9.0b3"
+  # A `dev` commit: serial proxy set-mode is not in a release yet
+  ESPHOME_VERSION: "13c27429a4d54d1b2ff9fd611f9baafdc3e5f37a"
 
 jobs:
   prepare-base:
@@ -205,7 +206,7 @@ jobs:
           curl -LsSf https://astral.sh/uv/install.sh | sh
           uv venv esphome-venv
           . esphome-venv/bin/activate
-          uv pip install --prerelease=allow "esphome>=${ESPHOME_VERSION}"
+          uv pip install "esphome @ git+https://github.com/esphome/esphome@${ESPHOME_VERSION}"
           esphome compile tests/esphome/host_daemon.yaml
       - name: Cache ESPHome binary
         if: steps.cache-esphome.outputs.cache-hit != 'true'

@@ -3,7 +3,7 @@
 import pytest
 
 try:
-    from aioesphomeapi.client import MIN_VERSION_PROXY_ACK, APIClient
+    from aioesphomeapi.client import APIClient
 except ImportError:
     pytest.skip(
         "aioesphomeapi is required to run esphome transport tests",
@@ -44,9 +44,11 @@ from serialx import (
 )
 from serialx.platforms.serial_esphome import (
     ESPHOME_DEFAULT_PORT,
+    MIN_VERSION_SERIAL_PROXY_SET_MODE,
     ESPHomeSerial,
     ESPHomeSerialTransport,
     InvalidSettingsError,
+    SerialProxyModeName,
 )
 
 from .common import ESPHOME_HOST_BINARY, create_esphome_pair, create_socat_pair
@@ -154,8 +156,8 @@ def mock_api_client(*port_names: str) -> MagicMock:
         AsyncMock(return_value=SerialProxyRequestResponse(status=SerialProxyStatus.OK)),  # type:ignore[call-arg]
         "serial_proxy_set_mode_await_response",
     )
-    # Recent enough that the validated helper does not fall back to a flushing ping
-    api.api_version = MIN_VERSION_PROXY_ACK
+    # Recent enough to answer set-mode, and for the validated helper to skip the flushing ping
+    api.api_version = MIN_VERSION_SERIAL_PROXY_SET_MODE
     api._get_connection.return_value.send_messages_await_response_complex = AsyncMock()
 
     return api
@@ -747,6 +749,32 @@ async def test_mode_raw_is_sent_explicitly(query: str) -> None:
         call.serial_proxy_set_mode_await_response(
             instance=0, mode=SerialProxyMode.RAW, timeout=ANY
         ),
+        call.serial_proxy_configure_await_response(
+            instance=0,
+            baudrate=115200,
+            flow_control=False,
+            parity=SerialProxyParity.NONE,
+            stop_bits=1,
+            data_size=8,
+        ),
+    ]
+
+
+@pytest.mark.parametrize("query", ["", "&mode=protocol"])
+async def test_mode_skipped_on_old_device(query: str) -> None:
+    """A device predating API 1.17 never answers set-mode, so it is not sent."""
+    api = mock_api_client("Zigbee")
+    api.api_version = APIVersion(1, 16)
+    url = f"esphome://127.0.0.1:6053/?port_name=Zigbee{query}"
+
+    with patch("serialx.platforms.serial_esphome.APIClient", return_value=api):
+        async with async_serial_for_url(url=url, baudrate=115200) as serial:
+            assert isinstance(serial.transport.serial, ESPHomeSerial)
+            assert serial.transport.serial.tap_mode is SerialProxyModeName.RAW
+
+    assert proxy_calls(api) == [
+        call.subscribe_serial_proxy_data(ANY),
+        call.serial_proxy_subscribe_await_response(0, timeout=ANY),
         call.serial_proxy_configure_await_response(
             instance=0,
             baudrate=115200,

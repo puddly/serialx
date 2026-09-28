@@ -78,6 +78,9 @@ _P = ParamSpec("_P")
 
 LOGGER = logging.getLogger(__name__)
 
+# Set-mode arrived in API 1.17. Earlier devices never answer a set-mode request.
+MIN_VERSION_SERIAL_PROXY_SET_MODE = APIVersion(1, 17)
+
 # Identity arrived in API 1.18. Earlier devices never answer an identity request.
 MIN_VERSION_SERIAL_PROXY_IDENTITY = APIVersion(1, 18)
 
@@ -808,6 +811,12 @@ class ESPHomeSerial(BaseSerial):
             )
         )
         self._instance_subscribed = True
+
+        # Older devices have no mode at all and never answer the request
+        version = self._api.api_version
+        if version is None or version < MIN_VERSION_SERIAL_PROXY_SET_MODE:
+            self._active_mode = SerialProxyModeName.RAW
+            return
 
         # Only the subscriber may set the mode, and `raw` is sent too so a client that
         # wants plain bytes can turn a tap off that an earlier session left on
