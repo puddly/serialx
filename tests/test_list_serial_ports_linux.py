@@ -11,12 +11,14 @@ if sys.platform not in ("linux", "darwin"):
     pytest.skip("Linux-only tests", allow_module_level=True)
 
 from pathlib import Path
+import re
 import shutil
 from unittest.mock import patch
 
 from serialx.common import SerialPortInfo
 from serialx.platforms import serial_linux
 from serialx.platforms.serial_linux import linux_list_serial_ports
+from serialx.udev import udev_serial_by_id_stem
 from tests.umockdev_loader import load_umockdev
 
 DATA_DIR = Path(__file__).parent / "data" / "linux"
@@ -462,3 +464,50 @@ def test_list_serial_ports_empty(tmp_path: Path) -> None:
         ports = linux_list_serial_ports()
 
     assert ports == []
+
+
+def _recorded_by_id_links(dump: Path) -> dict[str, set[str]]:
+    """Map each device node in a dump to the by-id links udev recorded for it."""
+    links: dict[str, set[str]] = {}
+
+    for paragraph in dump.read_text().split("\n\n"):
+        lines = paragraph.splitlines()
+        nodes = [line[3:] for line in lines if line.startswith("N: ")]
+        if not nodes:
+            continue
+
+        links[nodes[0]] = {
+            line.removeprefix("S: serial/by-id/")
+            for line in lines
+            if line.startswith("S: serial/by-id/")
+        }
+
+    return links
+
+
+@pytest.mark.parametrize(
+    "dump", sorted(DATA_DIR.glob("*.umockdev")), ids=lambda dump: dump.stem
+)
+def test_udev_serial_by_id_stem_matches_recorded_links(
+    tmp_path: Path, dump: Path
+) -> None:
+    """The stem matches the link udev created for every recorded port."""
+    _, ports = _list_ports(tmp_path, dump.name)
+    links = _recorded_by_id_links(dump)
+
+    for port in ports:
+        expected = {
+            re.sub(r"-port\d+$", "", link)
+            for link in links[Path(port.resolved_device).name]
+        }
+        stem = udev_serial_by_id_stem(port)
+
+        assert expected == (set() if stem is None else {stem})
+
+
+def test_read_optional_sysfs_keeps_newlines(tmp_path: Path) -> None:
+    """Descriptor bytes are read as-is, with only the kernel's newline removed."""
+    attr = tmp_path / "manufacturer"
+    attr.write_bytes(b"Nabu\r\nCasa\r\n")
+
+    assert serial_linux._read_optional_sysfs(attr) == "Nabu\r\nCasa\r"

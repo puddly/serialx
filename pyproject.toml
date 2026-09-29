@@ -26,7 +26,7 @@ repository = "https://github.com/puddly/serialx"
 documentation = "https://puddly.github.io/serialx/"
 
 [project.optional-dependencies]
-esphome = ["aioesphomeapi>=46.3.0; python_version >= '3.11'"]
+esphome = ["aioesphomeapi>=46.5.0; python_version >= '3.11'"]
 dev = [
   "uv>=0.11.14",
   "ruff>=0.14.6",
@@ -44,7 +44,7 @@ dev = [
   "types-psutil>=7.2.2.20260508",
   "types-pywin32>=311.0.0.20260508",
   "types-setuptools>=82.0.0.20260508",
-  "aioesphomeapi>=46.3.0 ; python_version >= '3.11'",
+  "aioesphomeapi>=46.5.0 ; python_version >= '3.11'",
 ]
 docs = [
   "sphinx>=7,<8.2.3; python_version < '3.11'",

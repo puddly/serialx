@@ -44,6 +44,7 @@ from .compat import (
     SerialTimeoutException,
 )
 from .platforms import Serial, SerialTransport
+from .udev import udev_serial_by_id_stem
 
 __all__ = [
     "AsyncSerial",
@@ -55,6 +56,7 @@ __all__ = [
     "open_serial_connection",
     "register_uri_handler",
     "serial_for_url",
+    "udev_serial_by_id_stem",
     "ModemPins",
     "Parity",
     "PinState",

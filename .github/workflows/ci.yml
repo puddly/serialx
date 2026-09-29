@@ -2,6 +2,8 @@ name: CI
 
 on:
   push:
+    branches:
+      - dev
   pull_request: ~
 
 concurrency:
@@ -10,9 +12,6 @@ concurrency:
 
 permissions:
   contents: read
-
-env:
-  ESPHOME_VERSION: "2026.9.0b3"
 
 jobs:
   prepare-base:
@@ -178,8 +177,15 @@ jobs:
           key: ${{ steps.cache-ser2net.outputs.cache-primary-key }}
 
   compile-esphome:
-    name: Compile ESPHome host daemon
+    name: Compile ESPHome host daemon (${{ matrix.esphome.ref }})
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        esphome:
+          - {ref: "2026.7.4", api: "1.14"}
+          - {ref: "2026.8.2", api: "1.15"}
+          - {ref: "2026.9.0", api: "1.16"}
+          - {ref: "13c27429a4d54d1b2ff9fd611f9baafdc3e5f37a", api: "1.17"}
     steps:
       - name: Check out code from GitHub
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -191,7 +197,7 @@ jobs:
         with:
           path: tests/esphome/.esphome/build/serialx-host-daemon/.pioenvs/serialx-host-daemon/program
           key: >-
-            2-esphome-daemon-${{ env.ESPHOME_VERSION }}-${{ hashFiles('tests/esphome/host_daemon.yaml', 'tests/esphome/external_components/**') }}
+            2-esphome-daemon-${{ matrix.esphome.ref }}-${{ hashFiles('tests/esphome/host_daemon.yaml', 'tests/esphome/external_components/**') }}
       - name: Set up Python 3.13
         if: steps.cache-esphome.outputs.cache-hit != 'true'
         uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
@@ -201,11 +207,16 @@ jobs:
         if: steps.cache-esphome.outputs.cache-hit != 'true'
         env:
           PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION: python
+          ESPHOME_REF: ${{ matrix.esphome.ref }}
         run: |
           curl -LsSf https://astral.sh/uv/install.sh | sh
           uv venv esphome-venv
           . esphome-venv/bin/activate
-          uv pip install --prerelease=allow "esphome>=${ESPHOME_VERSION}"
+          if [[ "$ESPHOME_REF" =~ ^[0-9a-f]{40}$ ]]; then
+            uv pip install "esphome @ git+https://github.com/esphome/esphome@${ESPHOME_REF}"
+          else
+            uv pip install "esphome==${ESPHOME_REF}"
+          fi
           esphome compile tests/esphome/host_daemon.yaml
       - name: Cache ESPHome binary
         if: steps.cache-esphome.outputs.cache-hit != 'true'
@@ -267,7 +278,7 @@ jobs:
 
   pytest:
     runs-on: ubuntu-latest
-    needs: [prepare-base, compile-esphome, build-ser2net, build-emulator, build-cp210x-modules]
+    needs: [prepare-base, build-ser2net, build-emulator, build-cp210x-modules]
     strategy:
       matrix:
         python-version: ["3.10", "3.11", "3.12", "3.13", "3.14"]
@@ -292,12 +303,6 @@ jobs:
           path: venv
           key: >-
             1-${{ runner.os }}-base-venv-${{ steps.python.outputs.python-version }}-${{ hashFiles('pyproject.toml', 'Cargo.toml', 'Cargo.lock', 'src/**') }}
-      - name: Restore cached ESPHome binary
-        uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
-        with:
-          path: tests/esphome/.esphome/build/serialx-host-daemon/.pioenvs/serialx-host-daemon/program
-          key: >-
-            2-esphome-daemon-${{ env.ESPHOME_VERSION }}-${{ hashFiles('tests/esphome/host_daemon.yaml', 'tests/esphome/external_components/**') }}
       - name: Restore cached ser2net binary
         uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
         with:
@@ -361,7 +366,6 @@ jobs:
             -o console_output_style=count \
             -p no:sugar \
             --adapter-pair "$(sed -n 1p ports.txt),$(sed -n 2p ports.txt),no-reset-write-buffer" \
-            -k "not cts_held and not rtscts_holds_writes" \
             tests
       - name: Show emulator and kernel logs
         if: failure()
@@ -372,6 +376,115 @@ jobs:
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: coverage-${{ matrix.python-version }}
+          include-hidden-files: true
+          path: .coverage
+
+  pytest-esphome:
+    runs-on: ubuntu-latest
+    needs: [prepare-base, compile-esphome, build-emulator, build-cp210x-modules]
+    strategy:
+      matrix:
+        # Keep in sync with `compile-esphome`
+        esphome:
+          - {ref: "2026.7.4", api: "1.14"}
+          - {ref: "2026.8.2", api: "1.15"}
+          - {ref: "2026.9.0", api: "1.16"}
+          - {ref: "13c27429a4d54d1b2ff9fd611f9baafdc3e5f37a", api: "1.17"}
+    name: Run ESPHome tests (${{ matrix.esphome.ref }}, API ${{ matrix.esphome.api }})
+    steps:
+      - name: Check out code from GitHub
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - name: Set up Python 3.14
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        id: python
+        with:
+          python-version: "3.14"
+          allow-prereleases: true
+          check-latest: true
+      - name: Restore base Python virtual environment
+        id: cache-venv
+        uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        with:
+          fail-on-cache-miss: true
+          path: venv
+          key: >-
+            1-${{ runner.os }}-base-venv-${{ steps.python.outputs.python-version }}-${{ hashFiles('pyproject.toml', 'Cargo.toml', 'Cargo.lock', 'src/**') }}
+      - name: Restore cached ESPHome binary
+        uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        with:
+          fail-on-cache-miss: true
+          path: tests/esphome/.esphome/build/serialx-host-daemon/.pioenvs/serialx-host-daemon/program
+          key: >-
+            2-esphome-daemon-${{ matrix.esphome.ref }}-${{ hashFiles('tests/esphome/host_daemon.yaml', 'tests/esphome/external_components/**') }}
+      - name: Restore cached CP2102 emulator
+        uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        with:
+          fail-on-cache-miss: true
+          path: tests/usbip-cp2102/target/release/usbip-cp2102
+          key: usbip-cp2102-${{ hashFiles('tests/usbip-cp2102/Cargo.toml', 'tests/usbip-cp2102/Cargo.lock', 'tests/usbip-cp2102/src/**') }}
+      - name: Get kernel version
+        id: kernel
+        run: echo "version=$(uname -r)" >> "$GITHUB_OUTPUT"
+      - name: Restore cached cp210x modules
+        id: cache-modules
+        uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        with:
+          path: tests/usbip-cp2102/modules
+          key: cp210x-modules-${{ steps.kernel.outputs.version }}-${{ hashFiles('tests/usbip-cp2102/build-cp210x-modules.sh') }}
+      - name: Build cp210x modules
+        if: steps.cache-modules.outputs.cache-hit != 'true'
+        run: tests/usbip-cp2102/build-cp210x-modules.sh
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y socat libudev-dev
+      - name: Start CP2102 emulator
+        run: |
+          sudo insmod tests/usbip-cp2102/modules/usbserial.ko
+          sudo insmod tests/usbip-cp2102/modules/cp210x.ko
+          sudo modprobe vhci-hcd || { sudo apt-get install -y "linux-modules-extra-$(uname -r)" && sudo modprobe vhci-hcd; }
+          sudo tests/usbip-cp2102/target/release/usbip-cp2102 > ports.txt 2> emulator.log &
+          timeout 30 sh -c 'until [ "$(wc -l < ports.txt)" -ge 2 ]; do sleep 0.2; done'
+          sudo chmod 666 $(cat ports.txt)
+      - name: Set up uv
+        run: |
+          curl -LsSf https://astral.sh/uv/install.sh | sh
+      - name: Register Python problem matcher
+        run: |
+          echo "::add-matcher::.github/workflows/matchers/python.json"
+      - name: Install Pytest Annotation plugin
+        run: |
+          . venv/bin/activate
+          uv pip install pytest-github-actions-annotate-failures
+      - name: Run pytest
+        env:
+          ESPHOME_API_VERSION: ${{ matrix.esphome.api }}
+        run: |
+          . venv/bin/activate
+          uv pip install pytest-xdist pytest-cov
+          pytest \
+            -n auto \
+            -qq \
+            --timeout=20 \
+            --durations=10 \
+            --cov=serialx \
+            -o console_output_style=count \
+            -p no:sugar \
+            --esphome-api-version "$ESPHOME_API_VERSION" \
+            --adapter-pair "$(sed -n 1p ports.txt),$(sed -n 2p ports.txt),no-reset-write-buffer" \
+            -k "esphome" \
+            tests
+      - name: Show emulator and kernel logs
+        if: failure()
+        run: |
+          cat emulator.log
+          sudo dmesg | tail -n 50
+      - name: Upload coverage artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: coverage-esphome-${{ matrix.esphome.ref }}
           include-hidden-files: true
           path: .coverage
 
@@ -584,7 +697,7 @@ jobs:
   coverage:
     name: Process test coverage
     runs-on: ubuntu-latest
-    needs: [pytest, pytest-macos, pytest-windows, pytest-pyodide]
+    needs: [pytest, pytest-esphome, pytest-macos, pytest-windows, pytest-pyodide]
     steps:
       - name: Check out code from GitHub
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
