@@ -559,6 +559,19 @@ class ESPHomeSerial(BaseSerial):
 
     @translate_esphome_errors
     async def _async_open(self) -> None:
+        # Matchers in the URI apply even with an externally passed API
+        if self._path is not None:
+            params = urllib.parse.parse_qs(urllib.parse.urlparse(str(self._path)).query)
+
+            for name in PORT_MATCHERS:
+                if name not in params:
+                    continue
+
+                value = params[name][0]
+                self._port_matchers[name] = (
+                    int(value, 0) if name in USB_PORT_MATCHERS else value
+                )
+
         # Only connect if the API was not passed in externally
         if self._api is None:
             if self._path is None:
@@ -577,17 +590,8 @@ class ESPHomeSerial(BaseSerial):
 
             if port_value.isdigit():
                 self._instance_id = int(port_value)
-            elif not self._port_name:
+            elif port_value and not self._port_name:
                 self._port_name = port_value
-
-            for name in PORT_MATCHERS:
-                if name not in params:
-                    continue
-
-                value = params[name][0]
-                self._port_matchers[name] = (
-                    int(value, 0) if name in USB_PORT_MATCHERS else value
-                )
 
             if "mode" in params:
                 self._mode = parse_serial_proxy_mode(params["mode"][0])
@@ -688,9 +692,13 @@ class ESPHomeSerial(BaseSerial):
                         identity, interface_description=proxy.name
                     )
 
-            # Opening a listed port only succeeds with the same device still attached
-            query = {"port_name": proxy.name}
-            if info.serial_number is not None:
+            # Opening a listed port only succeeds with the same device still attached.
+            # A device with a serial number is found wherever it is plugged in, one
+            # without is only told apart from an identical one by the port it is on.
+            query = {}
+            if info.serial_number is None:
+                query["port_name"] = proxy.name
+            else:
                 query["port_serial_number"] = info.serial_number
 
             udev_id = udev_serial_by_id_stem(info)
@@ -752,7 +760,9 @@ class ESPHomeSerial(BaseSerial):
         if self._api is None:
             return
 
-        if self._instance_id is None:
+        if self._instance_id is None and self._port_name is None:
+            await self._resolve_instance_id_from_matchers()
+        elif self._instance_id is None:
             await self._resolve_instance_id_from_name()
 
         # Also reached when `port_instance` skipped the lookup above
@@ -780,6 +790,55 @@ class ESPHomeSerial(BaseSerial):
         instance_id, proxy_info = name_to_info_mapping[self._port_name]
         self._instance_id = instance_id
         self._port_info = proxy_info
+
+    async def _resolve_instance_id_from_matchers(self) -> None:
+        """Look `_instance_id` up as the one port whose device matches every matcher."""
+        assert self._api is not None
+
+        if not self._port_matchers:
+            raise InvalidSettingsError("A port name or a port matcher is required")
+
+        version = self._api.api_version
+        if version is None or version < MIN_VERSION_SERIAL_PROXY_IDENTITY:
+            required = MIN_VERSION_SERIAL_PROXY_IDENTITY
+            raise SerialException(
+                "Serial proxy ports can only be found by the device behind them from"
+                f" API {required.major}.{required.minor}, the device runs {version}"
+            )
+
+        info = await self._call_on_client_loop(self._api.device_info())
+        matches: list[tuple[int, SerialProxyInfo]] = []
+
+        for instance, proxy_info in enumerate(info.serial_proxies):
+            identity = await self._call_on_client_loop(
+                self._api.serial_proxy_get_identity(
+                    instance, timeout=self._connect_timeout
+                )
+            )
+
+            if (
+                identity.source is not SerialProxyIdentitySource.NONE
+                and identity.flags & SerialProxyIdentityFlag.CONNECTED
+                and not identity.flags & SerialProxyIdentityFlag.ERROR
+                and self._port_mismatch(identity) is None
+            ):
+                matches.append((instance, proxy_info))
+
+        if not matches:
+            raise SerialException(
+                f"No serial proxy has a device attached with {self._port_matchers!r}"
+            )
+
+        if len(matches) > 1:
+            names = [proxy_info.name for _, proxy_info in matches]
+            raise SerialException(
+                f"Serial proxies {names!r} all have a device attached with"
+                f" {self._port_matchers!r}"
+            )
+
+        self._instance_id, self._port_info = matches[0]
+        self._port_name = self._port_info.name
+        self._port_checked = True
 
     async def _check_port_device(self) -> None:
         """Fail unless the device behind the port matches every matcher."""
