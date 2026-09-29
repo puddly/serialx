@@ -503,3 +503,11 @@ def test_udev_serial_by_id_stem_matches_recorded_links(
         stem = udev_serial_by_id_stem(port)
 
         assert expected == (set() if stem is None else {stem})
+
+
+def test_read_optional_sysfs_keeps_newlines(tmp_path: Path) -> None:
+    """Descriptor bytes are read as-is, with only the kernel's newline removed."""
+    attr = tmp_path / "manufacturer"
+    attr.write_bytes(b"Nabu\r\nCasa\r\n")
+
+    assert serial_linux._read_optional_sysfs(attr) == "Nabu\r\nCasa\r"

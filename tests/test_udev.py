@@ -62,6 +62,9 @@ def _usb_port(**overrides: Any) -> SerialPortInfo:
         ({"serial_number": "   "}, "usb-Nabu_Casa_ZBT-2-if00"),
         # Trailing newlines are stripped when udev reads the attribute
         ({"serial_number": "1234\r\n"}, "usb-Nabu_Casa_ZBT-2_1234-if00"),
+        # Values end at the first NUL
+        ({"manufacturer": "AB\x00CD"}, "usb-AB_ZBT-2_10B41DE589E4-if00"),
+        ({"serial_number": "12\x0034"}, "usb-Nabu_Casa_ZBT-2_12-if00"),
         # `ID_SERIAL` is cut at 255 bytes
         (
             {"manufacturer": "V", "product": "M", "serial_number": "A" * 300},

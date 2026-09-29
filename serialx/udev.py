@@ -21,7 +21,8 @@ UDEV_ALLOWED_CHARS = frozenset(
 
 def _udev_sysattr(value: str) -> bytes:
     """Encode a descriptor string the way `sd_device_get_sysattr_value` reads it."""
-    return value.encode("utf-8").rstrip(b"\r\n")
+    # udev handles the value as a C string, so it ends at the first NUL
+    return value.encode("utf-8").partition(b"\0")[0].rstrip(b"\r\n")
 
 
 def _udev_replace_whitespace(value: bytes, size: int) -> bytes:

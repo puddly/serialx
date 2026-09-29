@@ -183,7 +183,8 @@ def iterdir_safe(path: Path) -> Iterator[Path]:
 def _read_optional_sysfs(path: Path) -> str | None:
     """Read a sysfs string file, returning None if it does not exist."""
     try:
-        return path.read_text()[:-1]
+        # `read_text` would translate newlines within the descriptor
+        return path.read_bytes().decode("utf-8")[:-1]
     except OSError:
         return None
 
