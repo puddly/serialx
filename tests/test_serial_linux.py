@@ -20,13 +20,9 @@ from unittest.mock import ANY, call, patch
 
 from serialx.common import PortSettingsUpdate
 from serialx.platforms.serial_linux import (
-    CBAUD,
-    CBAUDEX,
-    TCGETS2,
-    TCSETS2,
+    TERMIOS2_ABI,
     LinuxSerial,
     LinuxSerialTransport,
-    Termios2Struct,
 )
 from tests.common import async_create_socat_pair, create_socat_pair
 
@@ -39,10 +35,10 @@ def _make_ioctl_mock(initial_buffer: bytes, captured_writes: list[bytes]) -> Any
     ioctl_orig = fcntl.ioctl
 
     def ioctl(fd: int, request: int, arg: Any = 0, mutate_flag: bool = True) -> Any:
-        if request == TCGETS2:
+        if request == TERMIOS2_ABI.tcgets2:
             arg[: len(initial_buffer)] = initial_buffer
             return 0
-        if request == TCSETS2:
+        if request == TERMIOS2_ABI.tcsets2:
             captured_writes.append(bytes(arg))
             return 0
         return ioctl_orig(fd, request, arg, mutate_flag)
@@ -56,9 +52,13 @@ def test_set_non_posix_baudrate_handles_actual_hardware_rate() -> None:
     # `struct termios2` after `tcsetattr(B115200)` on a typical Linux pty, but with
     # c_ispeed/c_ospeed reporting the cp210x actual hardware rate (115384) instead of
     # the requested 115200.
-    initial = Termios2Struct(
+    initial = TERMIOS2_ABI.struct(
         c_cflag=(
-            termios.CS8 | termios.CREAD | termios.HUPCL | termios.CLOCAL | CBAUDEX
+            termios.CS8
+            | termios.CREAD
+            | termios.HUPCL
+            | termios.CLOCAL
+            | TERMIOS2_ABI.bother
         ),
         c_ispeed=115384,
         c_ospeed=115384,
@@ -75,16 +75,16 @@ def test_set_non_posix_baudrate_handles_actual_hardware_rate() -> None:
                 serial._set_non_posix_baudrate(250000)
 
     assert len(captured) == 1
-    written = Termios2Struct.from_buffer_copy(captured[0])
+    written = TERMIOS2_ABI.struct.from_buffer_copy(captured[0])
     assert written.c_ispeed == 250000
     assert written.c_ospeed == 250000
-    # CBAUDEX should be the only CBAUD bit set, signalling "use ispeed/ospeed"
-    assert written.c_cflag & CBAUD == CBAUDEX
+    # BOTHER should be the only CBAUD bit set, signalling "use ispeed/ospeed"
+    assert written.c_cflag & TERMIOS2_ABI.cbaud == TERMIOS2_ABI.bother
 
 
 def test_set_non_posix_baudrate_zero_speed_raises() -> None:
     """A zero-filled readback indicates the struct layout is wrong."""
-    zeros = bytes(ctypes.sizeof(Termios2Struct))
+    zeros = bytes(ctypes.sizeof(TERMIOS2_ABI.struct))
     captured: list[bytes] = []
 
     with create_socat_pair() as (left, _right, _, _):

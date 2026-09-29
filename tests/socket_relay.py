@@ -6,54 +6,43 @@ from collections.abc import AsyncIterator, Callable, Iterator
 import contextlib
 import logging
 import queue
+import selectors
 import socket
 import struct
 import threading
-import time
 
 LOGGER = logging.getLogger(__name__)
 
+_PEERS = {"left": "right", "right": "left"}
+
 
 class _SocketPairRelay:
+    """Relay bytes between the current client of each of two listening sockets."""
+
     def __init__(self) -> None:
-        self.left_to_right: queue.Queue[bytes] = queue.Queue()
-        self.right_to_left: queue.Queue[bytes] = queue.Queue()
-        self.stop_event = threading.Event()
-        self.active_connections: dict[str, socket.socket | None] = {
+        self._selector = selectors.DefaultSelector()
+        self._servers = {"left": self._make_server(), "right": self._make_server()}
+        self._connections: dict[str, socket.socket | None] = {
             "left": None,
             "right": None,
         }
-        self.active_lock = threading.Lock()
-        self.relay_threads: list[threading.Thread] = []
-        self.left_server = self._make_server()
-        self.right_server = self._make_server()
-        self.left_url = f"socket://127.0.0.1:{self.left_server.getsockname()[1]}"
-        self.right_url = f"socket://127.0.0.1:{self.right_server.getsockname()[1]}"
+        self._outgoing = {"left": bytearray(), "right": bytearray()}
+        self._commands: queue.Queue[tuple[Callable[[], None], threading.Event]] = (
+            queue.Queue()
+        )
+        self._wakeup_reader, self._wakeup_writer = socket.socketpair()
+        self._stopped = False
+        self._thread = threading.Thread(target=self._run, daemon=True)
 
-    @staticmethod
-    def _close_socket(sock: socket.socket | None) -> None:
-        if sock is None:
-            return
-        with contextlib.suppress(OSError):
-            sock.shutdown(socket.SHUT_RDWR)
-        with contextlib.suppress(OSError):
-            sock.close()
+        for side, server in self._servers.items():
+            self._selector.register(server, selectors.EVENT_READ, ("server", side))
 
-    @staticmethod
-    def _reset_socket(sock: socket.socket | None) -> None:
-        """Abruptly drop a connection with a RST, simulating a yanked link."""
-        if sock is None:
-            return
+        self._selector.register(
+            self._wakeup_reader, selectors.EVENT_READ, ("wakeup", None)
+        )
 
-        with contextlib.suppress(OSError):
-            sock.setsockopt(
-                socket.SOL_SOCKET,
-                socket.SO_LINGER,
-                struct.pack("ii", 1, 0),
-            )
-
-        with contextlib.suppress(OSError):
-            sock.close()
+        self.left_url = f"socket://127.0.0.1:{self._servers['left'].getsockname()[1]}"
+        self.right_url = f"socket://127.0.0.1:{self._servers['right'].getsockname()[1]}"
 
     @staticmethod
     def _make_server() -> socket.socket:
@@ -61,123 +50,121 @@ class _SocketPairRelay:
         server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         server.bind(("127.0.0.1", 0))
         server.listen()
-        server.settimeout(0.1)
+        server.setblocking(False)
         return server
 
-    def _set_active_connection(self, side: str, conn: socket.socket) -> None:
-        with self.active_lock:
-            previous = self.active_connections[side]
-            self.active_connections[side] = conn
-        if previous is not conn:
-            self._close_socket(previous)
+    def _run(self) -> None:
+        while not self._stopped:
+            events = self._selector.select()
+            self._accept_pending()
 
-    def _clear_active_connection(self, side: str, conn: socket.socket) -> None:
-        with self.active_lock:
-            if self.active_connections[side] is conn:
-                self.active_connections[side] = None
+            for key, _mask in events:
+                kind, side = key.data
 
-    def _get_active_connection(self, side: str) -> socket.socket | None:
-        with self.active_lock:
-            return self.active_connections[side]
+                if kind == "wakeup":
+                    self._wakeup_reader.recv(4096)
+                elif kind == "conn" and key.fileobj is self._connections[side]:
+                    self._flush(side)
+                    # `_flush` may have dropped the connection
+                    if key.fileobj is self._connections[side]:
+                        self._read(side)
 
-    def _reader_loop(
-        self,
-        side: str,
-        conn: socket.socket,
-        outbound_queue: queue.Queue[bytes],
-        peer_side: str,
-    ) -> None:
-        try:
-            # Bounded recv so we don't deadlock or pin the FD
-            conn.settimeout(0.5)
+            while not self._commands.empty():
+                command, done = self._commands.get()
+                self._accept_pending()
+                command()
+                done.set()
 
-            while not self.stop_event.is_set():
+    def _accept_pending(self) -> None:
+        for side, server in self._servers.items():
+            while True:
                 try:
-                    data = conn.recv(4096)
-                except TimeoutError:
-                    continue  # Ignore timeouts
+                    conn, _ = server.accept()
+                except BlockingIOError:
+                    break
 
-                if not data:
-                    LOGGER.debug("%s client reached EOF", side)
-                    return
-                outbound_queue.put(data)
-                LOGGER.debug(
-                    "queued %d bytes from %s to %s",
-                    len(data),
-                    side,
-                    peer_side,
-                )
-        except OSError:
-            LOGGER.debug("%s client disconnected abruptly", side, exc_info=True)
-        finally:
-            self._clear_active_connection(side, conn)
-            self._close_socket(conn)
-            LOGGER.debug("closed %s client connection", side)
+                LOGGER.debug("accepted %s client connection", side)
+                conn.setblocking(False)
+                self._close_connection(side, abrupt=False)
+                self._connections[side] = conn
+                self._selector.register(conn, selectors.EVENT_READ, ("conn", side))
+                self._flush(side)
 
-    def _accept_loop(
-        self,
-        side: str,
-        server_sock: socket.socket,
-        outbound_queue: queue.Queue[bytes],
-        peer_side: str,
-    ) -> None:
-        while not self.stop_event.is_set():
+    def _read(self, side: str) -> None:
+        conn = self._connections[side]
+        assert conn is not None
+
+        try:
+            data = conn.recv(65536)
+        except BlockingIOError:
+            return
+        except ConnectionResetError:
+            data = b""
+
+        if not data:
+            LOGGER.debug("%s client disconnected", side)
+            self._close_connection(side, abrupt=False)
+            return
+
+        peer = _PEERS[side]
+        LOGGER.debug("relaying %d bytes from %s to %s", len(data), side, peer)
+        self._outgoing[peer] += data
+        self._flush(peer)
+
+    def _flush(self, side: str) -> None:
+        conn = self._connections[side]
+        outgoing = self._outgoing[side]
+
+        if conn is None:
+            return
+
+        if outgoing:
             try:
-                conn, _ = server_sock.accept()
-            except TimeoutError:
-                continue
-            except OSError:
-                if not self.stop_event.is_set():
-                    LOGGER.debug("%s server accept failed", side, exc_info=True)
+                sent = conn.send(outgoing)
+            except BlockingIOError:
+                sent = 0
+            except (BrokenPipeError, ConnectionResetError):
+                self._close_connection(side, abrupt=False)
                 return
 
-            LOGGER.debug("accepted %s client connection", side)
-            self._set_active_connection(side, conn)
+            del outgoing[:sent]
 
-            reader_thread = threading.Thread(
-                target=self._reader_loop,
-                args=(side, conn, outbound_queue, peer_side),
-                daemon=True,
-            )
-            self.relay_threads.append(reader_thread)
-            reader_thread.start()
+        events = selectors.EVENT_READ
+        if outgoing:
+            events |= selectors.EVENT_WRITE
 
-    def _writer_loop(
-        self,
-        side: str,
-        inbound_queue: queue.Queue[bytes],
-        peer_side: str,
-    ) -> None:
-        while not self.stop_event.is_set():
-            try:
-                data = inbound_queue.get(timeout=0.1)
-            except queue.Empty:
-                continue
+        self._selector.modify(conn, events, ("conn", side))
 
-            conn = self._get_active_connection(side)
-            while conn is None and not self.stop_event.is_set():
-                time.sleep(0.001)
-                conn = self._get_active_connection(side)
-            if conn is None:
-                continue
+    def _close_connection(self, side: str, *, abrupt: bool) -> None:
+        conn = self._connections[side]
+        if conn is None:
+            return
 
-            try:
-                conn.sendall(data)
-                LOGGER.debug(
-                    "forwarded %d bytes from %s to %s",
-                    len(data),
-                    peer_side,
-                    side,
+        self._connections[side] = None
+        self._outgoing[side].clear()
+        self._selector.unregister(conn)
+
+        if abrupt:
+            # A zero linger timeout makes `close()` send a RST, like a yanked cable
+            with contextlib.suppress(OSError):
+                conn.setsockopt(
+                    socket.SOL_SOCKET, socket.SO_LINGER, struct.pack("ii", 1, 0)
                 )
-            except OSError:
-                self._clear_active_connection(side, conn)
-                self._close_socket(conn)
-                LOGGER.debug(
-                    "failed forwarding bytes from %s to %s",
-                    peer_side,
-                    side,
-                    exc_info=True,
-                )
+        else:
+            with contextlib.suppress(OSError):
+                conn.shutdown(socket.SHUT_RDWR)
+
+        conn.close()
+
+    def _call(self, command: Callable[[], None]) -> None:
+        """Run a command on the relay thread and wait for it to finish."""
+        done = threading.Event()
+        self._commands.put((command, done))
+        self._wakeup_writer.send(b"\x00")
+        done.wait()
+
+    def _stop(self) -> None:
+        self._stopped = True
 
     def start(self) -> None:
         LOGGER.debug(
@@ -185,65 +172,24 @@ class _SocketPairRelay:
             self.left_url,
             self.right_url,
         )
-        self.relay_threads.extend(
-            [
-                threading.Thread(
-                    target=self._accept_loop,
-                    args=("left", self.left_server, self.left_to_right, "right"),
-                    daemon=True,
-                ),
-                threading.Thread(
-                    target=self._accept_loop,
-                    args=("right", self.right_server, self.right_to_left, "left"),
-                    daemon=True,
-                ),
-                threading.Thread(
-                    target=self._writer_loop,
-                    args=("left", self.right_to_left, "right"),
-                    daemon=True,
-                ),
-                threading.Thread(
-                    target=self._writer_loop,
-                    args=("right", self.left_to_right, "left"),
-                    daemon=True,
-                ),
-            ]
-        )
-        for relay_thread in self.relay_threads:
-            relay_thread.start()
+        self._thread.start()
 
     def disconnect_side(self, side: str, *, abrupt: bool) -> None:
-        # The client's connect() returns once the kernel completes the
-        # handshake, which can be before the accept loop has handed us the
-        # socket. Wait for it rather than no-op: it is guaranteed to arrive.
-        deadline = time.monotonic() + 5.0
-        conn = self._get_active_connection(side)
-        while conn is None and time.monotonic() < deadline:
-            time.sleep(0.005)
-            conn = self._get_active_connection(side)
-
-        if conn is None:
-            return
-
-        self._clear_active_connection(side, conn)
-
-        if abrupt:
-            self._reset_socket(conn)
-        else:
-            self._close_socket(conn)
+        self._call(lambda: self._close_connection(side, abrupt=abrupt))
 
     def close(self) -> None:
-        self.stop_event.set()
-        self._close_socket(self.left_server)
-        self._close_socket(self.right_server)
-        with self.active_lock:
-            connections = list(self.active_connections.values())
-            self.active_connections["left"] = None
-            self.active_connections["right"] = None
-        for conn in connections:
-            self._close_socket(conn)
-        for relay_thread in self.relay_threads:
-            relay_thread.join()
+        self._call(self._stop)
+        self._thread.join()
+
+        for side in _PEERS:
+            self._close_connection(side, abrupt=False)
+
+        for server in self._servers.values():
+            server.close()
+
+        self._selector.close()
+        self._wakeup_reader.close()
+        self._wakeup_writer.close()
         LOGGER.debug("stopped socket pair servers")
 
 

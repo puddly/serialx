@@ -7,7 +7,6 @@ mod darwin;
 mod windows;
 
 #[pyclass(get_all)]
-#[derive(Clone)]
 pub struct RustSerialPortInfo {
     pub device: String,
     pub vid: Option<u16>,

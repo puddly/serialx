@@ -1,0 +1,2 @@
+prune tests/data/usbip-cp2102
+prune tests/data/windows
