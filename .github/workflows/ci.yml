@@ -422,8 +422,8 @@ jobs:
         uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
         with:
           fail-on-cache-miss: true
-          path: tests/usbip-cp2102/target/release/usbip-cp2102
-          key: usbip-cp2102-${{ hashFiles('tests/usbip-cp2102/Cargo.toml', 'tests/usbip-cp2102/Cargo.lock', 'tests/usbip-cp2102/src/**') }}
+          path: tests/data/usbip-cp2102/target/release/usbip-cp2102
+          key: usbip-cp2102-${{ hashFiles('tests/data/usbip-cp2102/Cargo.toml', 'tests/data/usbip-cp2102/Cargo.lock', 'tests/data/usbip-cp2102/src/**') }}
       - name: Get kernel version
         id: kernel
         run: echo "version=$(uname -r)" >> "$GITHUB_OUTPUT"
@@ -431,21 +431,21 @@ jobs:
         id: cache-modules
         uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
         with:
-          path: tests/usbip-cp2102/modules
-          key: cp210x-modules-${{ steps.kernel.outputs.version }}-${{ hashFiles('tests/usbip-cp2102/build-cp210x-modules.sh') }}
+          path: tests/data/usbip-cp2102/modules
+          key: cp210x-modules-${{ steps.kernel.outputs.version }}-${{ hashFiles('tests/data/usbip-cp2102/build-cp210x-modules.sh') }}
       - name: Build cp210x modules
         if: steps.cache-modules.outputs.cache-hit != 'true'
-        run: tests/usbip-cp2102/build-cp210x-modules.sh
+        run: tests/data/usbip-cp2102/build-cp210x-modules.sh
       - name: Install system dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y socat libudev-dev
       - name: Start CP2102 emulator
         run: |
-          sudo insmod tests/usbip-cp2102/modules/usbserial.ko
-          sudo insmod tests/usbip-cp2102/modules/cp210x.ko
+          sudo insmod tests/data/usbip-cp2102/modules/usbserial.ko
+          sudo insmod tests/data/usbip-cp2102/modules/cp210x.ko
           sudo modprobe vhci-hcd || { sudo apt-get install -y "linux-modules-extra-$(uname -r)" && sudo modprobe vhci-hcd; }
-          sudo tests/usbip-cp2102/target/release/usbip-cp2102 > ports.txt 2> emulator.log &
+          sudo tests/data/usbip-cp2102/target/release/usbip-cp2102 > ports.txt 2> emulator.log &
           timeout 30 sh -c 'until [ "$(wc -l < ports.txt)" -ge 2 ]; do sleep 0.2; done'
           sudo chmod 666 $(cat ports.txt)
       - name: Set up uv
