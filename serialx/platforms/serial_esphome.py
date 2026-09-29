@@ -25,6 +25,7 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Callable, Coroutine
 from contextlib import suppress
+import dataclasses
 from enum import Enum, IntFlag
 import errno
 import functools
@@ -71,6 +72,7 @@ from serialx.common import (
     StopBits,
     register_uri_handler,
 )
+from serialx.udev import udev_serial_by_id_stem
 
 _T = TypeVar("_T")
 _S = TypeVar("_S", bound="SerialProxyRequestResponse | None")
@@ -136,8 +138,30 @@ MODE_MAP = {
     SerialProxyModeName.PROTOCOL: SerialProxyMode.PROTOCOL,
 }
 
+
+def identity_port_info(
+    identity: SerialProxyIdentity, interface_description: str
+) -> SerialPortInfo:
+    """Describe the device behind a port from its identity, with no URL yet."""
+    # Any source can carry USB metadata, but a zero ID means it carries none
+    has_usb = bool(identity.usb.vendor_id and identity.usb.product_id)
+
+    return SerialPortInfo(
+        device="",
+        resolved_device="",
+        vid=identity.usb.vendor_id if has_usb else None,
+        pid=identity.usb.product_id if has_usb else None,
+        serial_number=identity.serial_number or None,
+        manufacturer=identity.manufacturer or None,
+        product=identity.product or None,
+        bcd_device=identity.usb.bcd_device if has_usb else None,
+        interface_description=interface_description,
+        interface_num=identity.usb.interface_number if has_usb else None,
+    )
+
+
 # Matchers on the device behind a port, and where each is read from its identity
-PORT_MATCHERS: dict[str, Callable[[SerialProxyIdentity], str | int]] = {
+PORT_MATCHERS: dict[str, Callable[[SerialProxyIdentity], str | int | None]] = {
     "port_manufacturer": attrgetter("manufacturer"),
     "port_product": attrgetter("product"),
     "port_serial_number": attrgetter("serial_number"),
@@ -145,6 +169,9 @@ PORT_MATCHERS: dict[str, Callable[[SerialProxyIdentity], str | int]] = {
     "port_usb_pid": attrgetter("usb.product_id"),
     "port_usb_bcd_device": attrgetter("usb.bcd_device"),
     "port_usb_interface_num": attrgetter("usb.interface_number"),
+    "port_udev_id": lambda identity: udev_serial_by_id_stem(
+        identity_port_info(identity, interface_description="")
+    ),
 }
 
 # Any source can carry USB metadata, but a zero ID means it carries none, so these also
@@ -229,6 +256,7 @@ class ESPHomeSerial(BaseSerial):
         port_usb_pid: int | None = None,
         port_usb_bcd_device: int | None = None,
         port_usb_interface_num: int | None = None,
+        port_udev_id: str | None = None,
         key: str | None = None,
         password: str | None = None,
         noise_psk: str | None = None,
@@ -262,6 +290,9 @@ class ESPHomeSerial(BaseSerial):
             port_usb_bcd_device: USB device release number the device behind the port
                 must report.
             port_usb_interface_num: USB interface number the port must be bound to.
+            port_udev_id: The `/dev/serial/by-id/` link name udev would give the
+                device behind the port, without the directory or any `-portN` suffix.
+                See `udev_serial_by_id_stem`.
             port_instance: The numerical instance ID of the ESPHome serial proxy
                 instance to connect to.
 
@@ -309,6 +340,7 @@ class ESPHomeSerial(BaseSerial):
                 "port_usb_pid": port_usb_pid,
                 "port_usb_bcd_device": port_usb_bcd_device,
                 "port_usb_interface_num": port_usb_interface_num,
+                "port_udev_id": port_udev_id,
             }.items()
             if value is not None
         }
@@ -624,13 +656,18 @@ class ESPHomeSerial(BaseSerial):
         ports = []
 
         for instance, proxy in enumerate(device_info.serial_proxies):
-            serial_number: str | None = None
-            manufacturer: str | None = None
-            product: str | None = None
-            vid: int | None = None
-            pid: int | None = None
-            bcd_device: int | None = None
-            interface_num: int | None = None
+            info = SerialPortInfo(
+                device="",
+                resolved_device="",
+                vid=None,
+                pid=None,
+                serial_number=None,
+                manufacturer=None,
+                product=None,
+                bcd_device=None,
+                interface_description=proxy.name,
+                interface_num=None,
+            )
 
             if has_identity:
                 identity = await self._call_on_client_loop(
@@ -647,21 +684,18 @@ class ESPHomeSerial(BaseSerial):
                 )
 
                 if usable:
-                    serial_number = identity.serial_number or None
-                    manufacturer = identity.manufacturer or None
-                    product = identity.product or None
-
-                # Any source can carry USB metadata, but a zero ID means it carries none
-                if usable and identity.usb.vendor_id and identity.usb.product_id:
-                    vid = identity.usb.vendor_id
-                    pid = identity.usb.product_id
-                    bcd_device = identity.usb.bcd_device
-                    interface_num = identity.usb.interface_number
+                    info = identity_port_info(
+                        identity, interface_description=proxy.name
+                    )
 
             # Opening a listed port only succeeds with the same device still attached
             query = {"port_name": proxy.name}
-            if serial_number is not None:
-                query["port_serial_number"] = serial_number
+            if info.serial_number is not None:
+                query["port_serial_number"] = info.serial_number
+
+            udev_id = udev_serial_by_id_stem(info)
+            if udev_id is not None:
+                query["port_udev_id"] = udev_id
 
             url = urllib.parse.urlunparse(
                 urllib.parse.ParseResult(
@@ -674,20 +708,7 @@ class ESPHomeSerial(BaseSerial):
                 )
             )
 
-            ports.append(
-                SerialPortInfo(
-                    device=url,
-                    resolved_device=url,
-                    vid=vid,
-                    pid=pid,
-                    serial_number=serial_number,
-                    manufacturer=manufacturer,
-                    product=product,
-                    bcd_device=bcd_device,
-                    interface_description=proxy.name,
-                    interface_num=interface_num,
-                )
-            )
+            ports.append(dataclasses.replace(info, device=url, resolved_device=url))
 
         return ports
 

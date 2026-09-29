@@ -971,6 +971,7 @@ async def test_all_port_matchers_allow_connection() -> None:
             "port_usb_pid": "0x4001",
             "port_usb_bcd_device": "0x0101",
             "port_usb_interface_num": "0",
+            "port_udev_id": "usb-Nabu_Casa_ZBT-2_AABBCCDDEEFF-if00",
         }
     )
 
@@ -993,6 +994,7 @@ async def test_all_port_matchers_allow_connection() -> None:
         ("port_usb_pid", 0xEA60),
         ("port_usb_bcd_device", 0x0100),
         ("port_usb_interface_num", 1),
+        ("port_udev_id", "usb-Nabu_Casa_ZBT-2_AABBCCDDEEFF-if00-port0"),
     ],
 )
 async def test_port_matcher_mismatch_is_rejected(name: str, value: str | int) -> None:
@@ -1087,6 +1089,7 @@ async def test_list_serial_ports_reports_identity() -> None:
     ports = await async_list_serial_ports(Platform.ESPHOME, api=api)
 
     base = "esphome://127.0.0.1:6053/?port_name="
+    udev_id = "port_udev_id=usb-Nabu_Casa_ZBT-2_AABBCCDDEEFF-if00"
     empty = {
         "vid": None,
         "pid": None,
@@ -1098,8 +1101,8 @@ async def test_list_serial_ports_reports_identity() -> None:
     }
     assert ports == [
         SerialPortInfo(
-            device=f"{base}USB&port_serial_number=AABBCCDDEEFF",
-            resolved_device=f"{base}USB&port_serial_number=AABBCCDDEEFF",
+            device=f"{base}USB&port_serial_number=AABBCCDDEEFF&{udev_id}",
+            resolved_device=f"{base}USB&port_serial_number=AABBCCDDEEFF&{udev_id}",
             vid=0x303A,
             pid=0x4001,
             serial_number="AABBCCDDEEFF",
@@ -1131,8 +1134,8 @@ async def test_list_serial_ports_reports_identity() -> None:
             for name in ("Empty", "Unreadable", "None")
         ),
         SerialPortInfo(
-            device=f"{base}Mimic&port_serial_number=AABBCCDDEEFF",
-            resolved_device=f"{base}Mimic&port_serial_number=AABBCCDDEEFF",
+            device=f"{base}Mimic&port_serial_number=AABBCCDDEEFF&{udev_id}",
+            resolved_device=f"{base}Mimic&port_serial_number=AABBCCDDEEFF&{udev_id}",
             vid=0x303A,
             pid=0x4001,
             serial_number="AABBCCDDEEFF",
@@ -1158,6 +1161,44 @@ async def test_list_serial_ports_reports_identity() -> None:
     assert api.serial_proxy_get_identity.mock_calls == [
         call(instance, timeout=10.0) for instance in range(7)
     ]
+
+
+async def test_udev_id_match_allows_connection() -> None:
+    """The by-id stem is computed from the identity and compared as a whole."""
+    api = mock_api_client("Zigbee")
+    api.attach_mock(AsyncMock(return_value=_identity()), "serial_proxy_get_identity")
+    url = (
+        "esphome://127.0.0.1:6053/?port_name=Zigbee"
+        "&port_udev_id=usb-Nabu_Casa_ZBT-2_AABBCCDDEEFF-if00"
+    )
+
+    with patch("serialx.platforms.serial_esphome.APIClient", return_value=api):
+        async with async_serial_for_url(url=url, baudrate=115200):
+            pass
+
+    assert api.serial_proxy_get_identity.mock_calls == [call(0)]
+
+
+async def test_udev_id_without_usb_is_rejected() -> None:
+    """A device without USB IDs has no by-id link to match."""
+    api = mock_api_client("Zigbee")
+    api.attach_mock(
+        AsyncMock(
+            return_value=_identity(
+                source=SerialProxyIdentitySource.CONFIGURED, usb=UsbDeviceDescriptor()
+            )
+        ),
+        "serial_proxy_get_identity",
+    )
+    url = (
+        "esphome://127.0.0.1:6053/?port_name=Zigbee"
+        "&port_udev_id=usb-Nabu_Casa_ZBT-2_AABBCCDDEEFF-if00"
+    )
+
+    with patch("serialx.platforms.serial_esphome.APIClient", return_value=api):
+        with pytest.raises(SerialException, match="port_udev_id=None"):
+            async with async_serial_for_url(url=url, baudrate=115200):
+                pass
 
 
 async def test_list_serial_ports_skips_identity_on_old_api() -> None:
