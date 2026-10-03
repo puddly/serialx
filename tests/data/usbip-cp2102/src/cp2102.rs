@@ -262,25 +262,24 @@ impl Chip {
     }
 }
 
-/// Chips `2k` and `2k + 1` form null-modem pair `k`.
+/// One null-modem pair. `pair` keeps serials, bus IDs and device numbers
+/// unique when several simulations run side by side.
 pub struct Sim {
-    pub chips: Vec<Chip>,
-    lines: Vec<Line>,
+    pub chips: [Chip; 2],
+    lines: [Line; 2],
 }
 
 impl Sim {
-    pub fn new(pairs: usize) -> Self {
-        let chips = (0..2 * pairs)
-            .map(|i| Chip {
-                serial: format!("{}{}", if i % 2 == 0 { "left" } else { "right" }, i / 2),
-                busid: format!("1-{}", i + 1),
-                devnum: i as u32 + 2,
-                ..Chip::default()
-            })
-            .collect();
+    pub fn new(pair: usize) -> Self {
+        let chip = |i: usize| Chip {
+            serial: format!("{}{pair}", ["left", "right"][i]),
+            busid: format!("1-{}", 2 * pair + i + 1),
+            devnum: (2 * pair + i) as u32 + 2,
+            ..Chip::default()
+        };
         Sim {
-            lines: (0..2 * pairs).map(|_| Line::default()).collect(),
-            chips,
+            chips: [chip(0), chip(1)],
+            lines: [Line::default(), Line::default()],
         }
     }
 
@@ -294,7 +293,7 @@ impl Sim {
 
     /// CTS, DSR, DCD as seen by `dev`: the peer's RTS and DTR.
     fn peer_pins(&self, dev: usize) -> (bool, bool, bool) {
-        let peer = &self.chips[dev ^ 1];
+        let peer = &self.chips[1 - dev];
         (peer.rts_out(), peer.dtr_out(), peer.dtr_out())
     }
 
@@ -490,7 +489,7 @@ impl Sim {
     /// Runs both wires up to `now` under the current line state. Called before
     /// every URB so a pin or flow control change only affects bytes after it.
     pub fn advance(&mut self, now: u64) {
-        for dev in 0..self.chips.len() {
+        for dev in 0..2 {
             let (cts, _, _) = self.peer_pins(dev);
             let chip = &mut self.chips[dev];
             let line = &mut self.lines[dev];
@@ -515,11 +514,11 @@ impl Sim {
         }
 
         let mut received = Vec::new();
-        for dev in 0..self.chips.len() {
+        for dev in 0..2 {
             let chip = &mut self.chips[dev];
             received.clear();
             chip.receiver
-                .poll(&self.lines[dev ^ 1], &chip.fmt, now, &mut received);
+                .poll(&self.lines[1 - dev], &chip.fmt, now, &mut received);
             if chip.enabled {
                 for &b in &received {
                     chip.push_rx(b);
@@ -528,7 +527,7 @@ impl Sim {
             while chip.inflight.front().is_some_and(|&end| end <= now) {
                 chip.inflight.pop_front();
             }
-            self.lines[dev ^ 1].prune(chip.receiver.cursor);
+            self.lines[1 - dev].prune(chip.receiver.cursor);
         }
     }
 
@@ -541,13 +540,13 @@ impl Sim {
                 next = Some(t);
             }
         };
-        for dev in 0..self.chips.len() {
+        for dev in 0..2 {
             let chip = &self.chips[dev];
             let (cts, _, _) = self.peer_pins(dev);
             if !chip.tx.is_empty() && !chip.break_on && !(chip.cts_handshake() && !cts) {
                 consider(self.lines[dev].busy_until);
             }
-            if let Some(t) = chip.receiver.next_event(&self.lines[dev ^ 1], &chip.fmt) {
+            if let Some(t) = chip.receiver.next_event(&self.lines[1 - dev], &chip.fmt) {
                 consider(t);
             }
             if !chip.pending_out.is_empty() {
