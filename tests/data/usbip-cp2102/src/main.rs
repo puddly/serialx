@@ -94,7 +94,9 @@ fn wait_for_tty(serial: &str) -> String {
 
 #[tokio::main]
 async fn main() {
-    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
+    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info"))
+        .format_timestamp_micros()
+        .init();
     let args = Args::parse();
     let base = args.listen.unwrap_or_else(|| {
         if args.serve_only {
