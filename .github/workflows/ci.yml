@@ -349,6 +349,7 @@ jobs:
 
           sudo tests/data/usbip-cp2102/target/release/usbip-cp2102 \
             --pairs "$pairs" \
+            --time-scale 2 \
             > ports.txt 2> emulator.log &
 
           # The emulator prints one tty path per line once every port is attached
@@ -485,6 +486,7 @@ jobs:
 
           sudo tests/data/usbip-cp2102/target/release/usbip-cp2102 \
             --pairs "$pairs" \
+            --time-scale 2 \
             > ports.txt 2> emulator.log &
 
           # The emulator prints one tty path per line once every port is attached
