@@ -638,6 +638,7 @@ jobs:
         working-directory: C:\Program Files (x86)\com0com
         run: |
           .\setupc.exe --wait 1 install PortName=-,EmuBR=yes,cts=rrts,dsr=rdtr,dcd=rdtr PortName=-,EmuBR=yes,cts=rrts,dsr=rdtr,dcd=rdtr
+          .\setupc.exe --wait 1 install PortName=-,EmuBR=yes,cts=rrts,dsr=rdtr,dcd=rdtr PortName=-,EmuBR=yes,cts=rrts,dsr=rdtr,dcd=rdtr
       - name: Set up Python
         id: python
         uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
@@ -689,7 +690,9 @@ jobs:
         run: |
           venv\Scripts\activate
           python -m serialx.tools.list_ports
-          pytest --timeout=20 --cov=serialx tests --adapter-pair CNCA0,CNCB0,no-buffer-control,no-rts-dtr-readback
+          pytest --timeout=20 --cov=serialx tests `
+            --adapter-pair CNCA0,CNCB0,no-buffer-control,no-rts-dtr-readback `
+            --adapter-pair CNCA1,CNCB1,no-buffer-control,no-rts-dtr-readback
       - name: Upload coverage artifact
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
