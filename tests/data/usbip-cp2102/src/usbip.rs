@@ -163,8 +163,8 @@ impl Server {
                 OP_REQ_DEVLIST => {
                     let sim = self.sim.lock().unwrap();
                     let mut p = op_header(OP_REP_DEVLIST, 0);
-                    p.extend_from_slice(&(sim.chips.len() as u32).to_be_bytes());
-                    for dev in 0..sim.chips.len() {
+                    p.extend_from_slice(&2u32.to_be_bytes());
+                    for dev in 0..2 {
                         p.extend(device_info(&sim, dev));
                         p.extend_from_slice(&[0xff, 0, 0, 0]);
                     }
