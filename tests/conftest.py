@@ -37,6 +37,8 @@ from tests.common import (
 )
 from tests.socket_relay import create_socket_pair
 
+ADAPTER_POOL_KEY = pytest.StashKey[tuple[str, str]]()
+
 
 def _get_forced_posix_uri_schemes() -> list[str]:
     """Get extra POSIX URI schemes to test on this platform.
@@ -89,7 +91,9 @@ def pytest_addoption(parser: pytest.Parser) -> None:
             "Pair of serial endpoints in format LEFT,RIGHT[,FLAG...] "
             "(e.g. /dev/ttyUSB0,/dev/ttyUSB1,no-rts-cts "
             "or rfc2217://127.0.0.1:5001,"
-            "rfc2217://127.0.0.1:5002,no-write-timeout)"
+            "rfc2217://127.0.0.1:5002,no-write-timeout). Repeat to form a pool of "
+            "interchangeable pairs: each test runs once, dealt to one pair, so "
+            "pytest-xdist can run adapter tests on as many workers as there are pairs"
         ),
     )
     parser.addoption(
@@ -109,10 +113,31 @@ def parse_esphome_api_version(config: pytest.Config) -> tuple[int, int] | None:
     return int(major), int(minor)
 
 
+@pytest.hookimpl(tryfirst=True)
 def pytest_collection_modifyitems(
     config: pytest.Config, items: list[pytest.Item]
 ) -> None:
-    """Skip tests marked `esphome_api` above the expected daemon API version."""
+    """Deal pooled adapter tests across pools and apply `esphome_api` skips."""
+    # Runs before pytest-xdist's hook, which derives `--dist loadgroup` groups from
+    # the `xdist_group` markers added here
+    dealt = 0
+
+    for item in items:
+        callspec = getattr(item, "callspec", None)
+        if callspec is None or "serial_pair" not in callspec.params:
+            continue
+
+        spec: UnresolvedSerialPair = callspec.params["serial_pair"]
+        if not spec.pool:
+            continue
+
+        left, right = spec.pool[dealt % len(spec.pool)]
+        dealt += 1
+
+        item.stash[ADAPTER_POOL_KEY] = (left, right)
+        item.add_marker(pytest.mark.xdist_group(name=left))
+        item.add_marker(pytest.mark.xdist_group(name=right))
+
     expected = parse_esphome_api_version(config)
     if expected is None:
         return
@@ -149,6 +174,32 @@ def _get_endpoint_backend(path: str) -> SerialBackend:
     return SerialBackend.ADAPTER
 
 
+def _parse_adapter_pair(pair: str) -> tuple[str, str, frozenset[SerialQuirk]]:
+    """Parse a `LEFT,RIGHT[,FLAG...]` CLI value into endpoints and quirks."""
+    parts = [part.strip() for part in pair.split(",")]
+    expected_format = "LEFT,RIGHT[,FLAG...]"
+
+    if len(parts) < 2:
+        raise ValueError(
+            f"Invalid adapter pair format: {pair}. Expected {expected_format}"
+        )
+
+    left, right, *raw_flags = parts
+
+    if not left or not right:
+        raise ValueError(
+            f"Invalid adapter pair format: {pair}. Expected {expected_format}"
+        )
+
+    quirks = (
+        SERIAL_PAIR_DEFAULT_QUIRKS[_get_endpoint_backend(left)]
+        | SERIAL_PAIR_DEFAULT_QUIRKS[_get_endpoint_backend(right)]
+        | frozenset({SerialQuirk(raw_flag) for raw_flag in raw_flags})
+    )
+
+    return left, right, quirks
+
+
 def pytest_generate_tests(metafunc: pytest.Metafunc) -> None:
     """Parametrize tests based on available backends."""
 
@@ -173,38 +224,23 @@ def pytest_generate_tests(metafunc: pytest.Metafunc) -> None:
 
     adapters = []
 
-    # Physical adapters passed in with a CLI flag
-    for pair in metafunc.config.getoption("--adapter-pair"):
-        parts = [part.strip() for part in pair.split(",")]
-        expected_format = "LEFT,RIGHT[,FLAG...]"
+    # Physical adapters passed in with a CLI flag form one pool of interchangeable
+    # pairs; each test is dealt to a pair at collection time
+    pool = [
+        _parse_adapter_pair(pair)
+        for pair in metafunc.config.getoption("--adapter-pair")
+    ]
 
-        if len(parts) < 2:
-            raise ValueError(
-                f"Invalid adapter pair format: {pair}. Expected {expected_format}"
-            )
-
-        left, right, *raw_flags = parts
-
-        if not left or not right:
-            raise ValueError(
-                f"Invalid adapter pair format: {pair}. Expected {expected_format}"
-            )
-
-        left_backend = _get_endpoint_backend(left)
-        right_backend = _get_endpoint_backend(right)
-
+    if pool:
         adapters.append(
             UnresolvedSerialPair(
                 backends=(SerialBackend.ADAPTER,),
-                left=left,
-                right=right,
-                original_left=left,
-                original_right=right,
-                quirks=(
-                    SERIAL_PAIR_DEFAULT_QUIRKS[left_backend]
-                    | SERIAL_PAIR_DEFAULT_QUIRKS[right_backend]
-                    | frozenset({SerialQuirk(raw_flag) for raw_flag in raw_flags})
-                ),
+                left=None,
+                right=None,
+                original_left=None,
+                original_right=None,
+                quirks=frozenset().union(*(quirks for _, _, quirks in pool)),
+                pool=tuple((left, right) for left, right, _ in pool),
             )
         )
 
@@ -297,7 +333,11 @@ def pytest_generate_tests(metafunc: pytest.Metafunc) -> None:
 
             backends = [b.name for b in spec.backends]
 
-            if spec.original_left != "gen" and spec.original_right != "gen":
+            if len(spec.pool) > 1:
+                backends.append("pool")
+            elif len(spec.pool) == 1:
+                backends.append("-".join(spec.pool[0]))
+            elif spec.original_left != "gen" and spec.original_right != "gen":
                 backends.append(f"{spec.original_left}-{spec.original_right}")
 
             param_id = "+".join(backends)
@@ -315,6 +355,12 @@ def pytest_generate_tests(metafunc: pytest.Metafunc) -> None:
 def serial_pair(request: pytest.FixtureRequest) -> Generator[SerialPair]:
     """Fixture for a connected serial port pair with the provided backend."""
     spec: UnresolvedSerialPair = request.param
+
+    if spec.pool:
+        left, right = request.node.stash[ADAPTER_POOL_KEY]
+        spec = dataclasses.replace(
+            spec, left=left, right=right, original_left=left, original_right=right
+        )
 
     for marker in request.node.iter_markers("skip_quirks"):
         if set(marker.args) & set(spec.quirks):

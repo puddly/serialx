@@ -339,9 +339,40 @@ jobs:
           sudo insmod tests/data/usbip-cp2102/modules/usbserial.ko
           sudo insmod tests/data/usbip-cp2102/modules/cp210x.ko
           sudo modprobe vhci-hcd || { sudo apt-get install -y "linux-modules-extra-$(uname -r)" && sudo modprobe vhci-hcd; }
-          sudo tests/data/usbip-cp2102/target/release/usbip-cp2102 > ports.txt 2> emulator.log &
-          timeout 30 sh -c 'until [ "$(wc -l < ports.txt)" -ge 2 ]; do sleep 0.2; done'
+
+          # One adapter pair per pytest-xdist worker. vhci_hcd has 8 high-speed
+          # ports, so at most 4 pairs.
+          pairs=$(nproc)
+          if [ "$pairs" -gt 4 ]; then
+            pairs=4
+          fi
+
+          sudo tests/data/usbip-cp2102/target/release/usbip-cp2102 \
+            --pairs "$pairs" \
+            --time-scale 10 \
+            > ports.txt 2> emulator.log &
+
+          # The emulator prints one tty path per line once every port is attached
+          expected_lines=$((2 * pairs))
+
+          ports_ready() {
+            [ "$(wc -l < ports.txt)" -ge "$expected_lines" ]
+          }
+
+          for _ in $(seq 150); do
+            if ports_ready; then
+              break
+            fi
+            sleep 0.2
+          done
+          ports_ready
+
           sudo chmod 666 $(cat ports.txt)
+
+          # Consecutive lines are the two ends of one pair
+          while read -r left && read -r right; do
+            echo "--adapter-pair=$left,$right,no-reset-write-buffer"
+          done < ports.txt > adapter-pairs.txt
       - name: Set up uv
         run: |
           curl -LsSf https://astral.sh/uv/install.sh | sh
@@ -365,7 +396,7 @@ jobs:
             --cov=serialx \
             -o console_output_style=count \
             -p no:sugar \
-            --adapter-pair "$(sed -n 1p ports.txt),$(sed -n 2p ports.txt),no-reset-write-buffer" \
+            $(cat adapter-pairs.txt) \
             tests
       - name: Show emulator and kernel logs
         if: failure()
@@ -445,9 +476,40 @@ jobs:
           sudo insmod tests/data/usbip-cp2102/modules/usbserial.ko
           sudo insmod tests/data/usbip-cp2102/modules/cp210x.ko
           sudo modprobe vhci-hcd || { sudo apt-get install -y "linux-modules-extra-$(uname -r)" && sudo modprobe vhci-hcd; }
-          sudo tests/data/usbip-cp2102/target/release/usbip-cp2102 > ports.txt 2> emulator.log &
-          timeout 30 sh -c 'until [ "$(wc -l < ports.txt)" -ge 2 ]; do sleep 0.2; done'
+
+          # One adapter pair per pytest-xdist worker. vhci_hcd has 8 high-speed
+          # ports, so at most 4 pairs.
+          pairs=$(nproc)
+          if [ "$pairs" -gt 4 ]; then
+            pairs=4
+          fi
+
+          sudo tests/data/usbip-cp2102/target/release/usbip-cp2102 \
+            --pairs "$pairs" \
+            --time-scale 10 \
+            > ports.txt 2> emulator.log &
+
+          # The emulator prints one tty path per line once every port is attached
+          expected_lines=$((2 * pairs))
+
+          ports_ready() {
+            [ "$(wc -l < ports.txt)" -ge "$expected_lines" ]
+          }
+
+          for _ in $(seq 150); do
+            if ports_ready; then
+              break
+            fi
+            sleep 0.2
+          done
+          ports_ready
+
           sudo chmod 666 $(cat ports.txt)
+
+          # Consecutive lines are the two ends of one pair
+          while read -r left && read -r right; do
+            echo "--adapter-pair=$left,$right,no-reset-write-buffer"
+          done < ports.txt > adapter-pairs.txt
       - name: Set up uv
         run: |
           curl -LsSf https://astral.sh/uv/install.sh | sh
@@ -473,7 +535,7 @@ jobs:
             -o console_output_style=count \
             -p no:sugar \
             --esphome-api-version "$ESPHOME_API_VERSION" \
-            --adapter-pair "$(sed -n 1p ports.txt),$(sed -n 2p ports.txt),no-reset-write-buffer" \
+            $(cat adapter-pairs.txt) \
             -k "esphome" \
             tests
       - name: Show emulator and kernel logs

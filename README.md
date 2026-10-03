@@ -142,8 +142,11 @@ Serialx relies on automated testing. CI runs tests using both `socat` virtual PT
 pass CLI flags to `pytest`:
 
 ```bash
-pytest --adapter-pair=/dev/serial/by-id/left1:/dev/serial/by-id/right1 \
-       --adapter-pair=/dev/serial/by-id/left2:/dev/serial/by-id/right2
+pytest --adapter-pair=/dev/serial/by-id/left1,/dev/serial/by-id/right1 \
+       --adapter-pair=/dev/serial/by-id/left2,/dev/serial/by-id/right2
 ```
+
+Each test runs once, on any one of the pairs. More pairs let more `pytest-xdist`
+workers run adapter tests at once.
 
 By default, tests run in parallel. You can disable this by passing `-n 0` to `pytest`.

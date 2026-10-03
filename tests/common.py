@@ -175,6 +175,9 @@ class UnresolvedSerialPair:
     # Largest payload a close()-time drain can carry through this pair, in bytes
     max_drain_payload: int = 4096
 
+    # Interchangeable adapter pairs that tests are dealt across, see `--adapter-pair`
+    pool: tuple[tuple[str, str], ...] = ()
+
     def chain(self, *backends: SerialBackend) -> Self:
         """Chain another backend layer on top of this one, accumulating quirks."""
         result = self
