@@ -83,15 +83,24 @@ def udev_serial_by_id_stem(port: SerialPortInfo) -> str | None:
     udev appends `-port{N}` only when a `usb-serial` driver binds the port, not for CDC
     ACM. Which one binds cannot be known from the port, so it is left out.
     """
-    if port.vid is None or port.pid is None or port.interface_num is None:
+
+    if port.interface_num is None:
         return None
 
-    vendor = _udev_sysattr(
-        port.manufacturer if port.manufacturer is not None else f"{port.vid:04x}"
-    )
-    model = _udev_sysattr(
-        port.product if port.product is not None else f"{port.pid:04x}"
-    )
+    if port.manufacturer is not None:
+        vendor = _udev_sysattr(port.manufacturer)
+    elif port.vid is not None:
+        vendor = f"{port.vid:04x}".encode("ascii")
+    else:
+        return None
+
+    if port.product is not None:
+        model = _udev_sysattr(port.product)
+    elif port.pid is not None:
+        model = f"{port.pid:04x}".encode("ascii")
+    else:
+        return None
+
     id_serial = (
         _udev_replace_chars(_udev_replace_whitespace(vendor, 63))
         + b"_"

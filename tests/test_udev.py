@@ -74,6 +74,9 @@ def _usb_port(**overrides: Any) -> SerialPortInfo:
             {"manufacturer": "V", "product": "M", "serial_number": None},
             "usb-V_M-if00",
         ),
+        # IDs are not needed when the strings are present
+        ({"vid": None}, "usb-Nabu_Casa_ZBT-2_10B41DE589E4-if00"),
+        ({"pid": None}, "usb-Nabu_Casa_ZBT-2_10B41DE589E4-if00"),
     ],
 )
 def test_udev_serial_by_id_stem(overrides: dict[str, Any], expected: str) -> None:
@@ -81,7 +84,14 @@ def test_udev_serial_by_id_stem(overrides: dict[str, Any], expected: str) -> Non
     assert udev_serial_by_id_stem(_usb_port(**overrides)) == expected
 
 
-@pytest.mark.parametrize("missing", ["vid", "pid", "interface_num"])
-def test_udev_serial_by_id_stem_not_usb(missing: str) -> None:
-    """No by-id link exists without a USB bus or interface number."""
-    assert udev_serial_by_id_stem(_usb_port(**{missing: None})) is None
+@pytest.mark.parametrize(
+    "missing",
+    [
+        pytest.param({"interface_num": None}, id="interface_num"),
+        pytest.param({"manufacturer": None, "vid": None}, id="vendor"),
+        pytest.param({"product": None, "pid": None}, id="model"),
+    ],
+)
+def test_udev_serial_by_id_stem_incomplete(missing: dict[str, Any]) -> None:
+    """No by-id link exists without an interface number, vendor, or model."""
+    assert udev_serial_by_id_stem(_usb_port(**missing)) is None
