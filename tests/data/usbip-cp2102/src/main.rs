@@ -17,12 +17,17 @@ use crate::cp2102::Sim;
 use crate::usbip::{op_req_import, Server, DEVICE_INFO_LEN, OP_REP_IMPORT, USB_SPEED_FULL};
 
 const VHCI: &str = "/sys/devices/platform/vhci_hcd.0";
-const SERIALS: [&str; 2] = ["left", "right"];
 
-/// Emulates a null-modem pair of CP2102 adapters over USB/IP.
+/// Emulates null-modem pairs of CP2102 adapters over USB/IP.
 #[derive(Parser)]
 struct Args {
-    /// Address for the USB/IP server. Defaults to an ephemeral port, or 3240 with --serve-only.
+    /// Number of null-modem pairs to emulate. vhci_hcd has 8 high-speed ports, so at most 4.
+    /// Each pair is its own simulation behind its own USB/IP server, so pairs never
+    /// perturb each other's timing.
+    #[arg(long, default_value_t = 1)]
+    pairs: usize,
+    /// Address for the first pair's USB/IP server; later pairs use the following ports.
+    /// Defaults to ephemeral ports, or 3240 with --serve-only.
     #[arg(long)]
     listen: Option<SocketAddr>,
     /// Only run the USB/IP server; attach with the usbip tool yourself.
@@ -89,9 +94,11 @@ fn wait_for_tty(serial: &str) -> String {
 
 #[tokio::main]
 async fn main() {
-    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
+    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info"))
+        .format_timestamp_micros()
+        .init();
     let args = Args::parse();
-    let listen = args.listen.unwrap_or_else(|| {
+    let base = args.listen.unwrap_or_else(|| {
         if args.serve_only {
             "127.0.0.1:3240"
         } else {
@@ -100,16 +107,31 @@ async fn main() {
         .parse()
         .unwrap()
     });
-    let listener = TcpListener::bind(listen).await.unwrap();
-    let addr = listener.local_addr().unwrap();
-    info!("usbip server on {addr}");
 
-    let server = Server::new(Sim::new(SERIALS), args.time_scale);
-    let devids = {
-        let sim = server.sim.lock().unwrap();
-        [sim.devid(0), sim.devid(1)]
-    };
-    tokio::spawn(server.clone().serve(listener));
+    // (server address, busid, devid, serial) for every emulated chip
+    let mut chips: Vec<(SocketAddr, String, u32, String)> = Vec::new();
+
+    for pair in 0..args.pairs {
+        let port = if base.port() == 0 {
+            0
+        } else {
+            base.port() + pair as u16
+        };
+        let listener = TcpListener::bind(SocketAddr::new(base.ip(), port))
+            .await
+            .unwrap();
+        let addr = listener.local_addr().unwrap();
+        info!("usbip server for pair {pair} on {addr}");
+
+        let server = Server::new(Sim::new(pair), args.time_scale);
+        {
+            let sim = server.sim.lock().unwrap();
+            for (i, chip) in sim.chips.iter().enumerate() {
+                chips.push((addr, chip.busid.clone(), sim.devid(i), chip.serial.clone()));
+            }
+        }
+        tokio::spawn(server.clone().serve(listener));
+    }
 
     if args.serve_only {
         tokio::signal::ctrl_c().await.unwrap();
@@ -117,17 +139,22 @@ async fn main() {
     }
 
     let (ports, ttys) = tokio::task::spawn_blocking(move || {
-        let ports = [
-            attach(addr, "1-1", devids[0]),
-            attach(addr, "1-2", devids[1]),
-        ];
-        let ttys = [wait_for_tty(SERIALS[0]), wait_for_tty(SERIALS[1])];
+        let ports: Vec<u32> = chips
+            .iter()
+            .map(|(addr, busid, devid, _)| attach(*addr, busid, *devid))
+            .collect();
+        let ttys: Vec<String> = chips
+            .iter()
+            .map(|(_, _, _, serial)| wait_for_tty(serial))
+            .collect();
         (ports, ttys)
     })
     .await
     .unwrap();
 
-    println!("{}\n{}", ttys[0], ttys[1]);
+    for tty in &ttys {
+        println!("{tty}");
+    }
 
     tokio::signal::ctrl_c().await.unwrap();
     for port in ports {

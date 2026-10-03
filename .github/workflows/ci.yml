@@ -339,9 +339,40 @@ jobs:
           sudo insmod tests/data/usbip-cp2102/modules/usbserial.ko
           sudo insmod tests/data/usbip-cp2102/modules/cp210x.ko
           sudo modprobe vhci-hcd || { sudo apt-get install -y "linux-modules-extra-$(uname -r)" && sudo modprobe vhci-hcd; }
-          sudo tests/data/usbip-cp2102/target/release/usbip-cp2102 > ports.txt 2> emulator.log &
-          timeout 30 sh -c 'until [ "$(wc -l < ports.txt)" -ge 2 ]; do sleep 0.2; done'
+
+          # One adapter pair per pytest-xdist worker. vhci_hcd has 8 high-speed
+          # ports, so at most 4 pairs.
+          pairs=$(nproc)
+          if [ "$pairs" -gt 4 ]; then
+            pairs=4
+          fi
+
+          sudo tests/data/usbip-cp2102/target/release/usbip-cp2102 \
+            --pairs "$pairs" \
+            --time-scale 2 \
+            > ports.txt 2> emulator.log &
+
+          # The emulator prints one tty path per line once every port is attached
+          expected_lines=$((2 * pairs))
+
+          ports_ready() {
+            [ "$(wc -l < ports.txt)" -ge "$expected_lines" ]
+          }
+
+          for _ in $(seq 150); do
+            if ports_ready; then
+              break
+            fi
+            sleep 0.2
+          done
+          ports_ready
+
           sudo chmod 666 $(cat ports.txt)
+
+          # Consecutive lines are the two ends of one pair
+          while read -r left && read -r right; do
+            echo "--adapter-pair=$left,$right,no-reset-write-buffer"
+          done < ports.txt > adapter-pairs.txt
       - name: Set up uv
         run: |
           curl -LsSf https://astral.sh/uv/install.sh | sh
@@ -365,7 +396,7 @@ jobs:
             --cov=serialx \
             -o console_output_style=count \
             -p no:sugar \
-            --adapter-pair "$(sed -n 1p ports.txt),$(sed -n 2p ports.txt),no-reset-write-buffer" \
+            $(cat adapter-pairs.txt) \
             tests
       - name: Show emulator and kernel logs
         if: failure()
@@ -445,9 +476,40 @@ jobs:
           sudo insmod tests/data/usbip-cp2102/modules/usbserial.ko
           sudo insmod tests/data/usbip-cp2102/modules/cp210x.ko
           sudo modprobe vhci-hcd || { sudo apt-get install -y "linux-modules-extra-$(uname -r)" && sudo modprobe vhci-hcd; }
-          sudo tests/data/usbip-cp2102/target/release/usbip-cp2102 > ports.txt 2> emulator.log &
-          timeout 30 sh -c 'until [ "$(wc -l < ports.txt)" -ge 2 ]; do sleep 0.2; done'
+
+          # One adapter pair per pytest-xdist worker. vhci_hcd has 8 high-speed
+          # ports, so at most 4 pairs.
+          pairs=$(nproc)
+          if [ "$pairs" -gt 4 ]; then
+            pairs=4
+          fi
+
+          sudo tests/data/usbip-cp2102/target/release/usbip-cp2102 \
+            --pairs "$pairs" \
+            --time-scale 2 \
+            > ports.txt 2> emulator.log &
+
+          # The emulator prints one tty path per line once every port is attached
+          expected_lines=$((2 * pairs))
+
+          ports_ready() {
+            [ "$(wc -l < ports.txt)" -ge "$expected_lines" ]
+          }
+
+          for _ in $(seq 150); do
+            if ports_ready; then
+              break
+            fi
+            sleep 0.2
+          done
+          ports_ready
+
           sudo chmod 666 $(cat ports.txt)
+
+          # Consecutive lines are the two ends of one pair
+          while read -r left && read -r right; do
+            echo "--adapter-pair=$left,$right,no-reset-write-buffer"
+          done < ports.txt > adapter-pairs.txt
       - name: Set up uv
         run: |
           curl -LsSf https://astral.sh/uv/install.sh | sh
@@ -473,7 +535,7 @@ jobs:
             -o console_output_style=count \
             -p no:sugar \
             --esphome-api-version "$ESPHOME_API_VERSION" \
-            --adapter-pair "$(sed -n 1p ports.txt),$(sed -n 2p ports.txt),no-reset-write-buffer" \
+            $(cat adapter-pairs.txt) \
             -k "esphome" \
             tests
       - name: Show emulator and kernel logs
@@ -576,6 +638,7 @@ jobs:
         working-directory: C:\Program Files (x86)\com0com
         run: |
           .\setupc.exe --wait 1 install PortName=-,EmuBR=yes,cts=rrts,dsr=rdtr,dcd=rdtr PortName=-,EmuBR=yes,cts=rrts,dsr=rdtr,dcd=rdtr
+          .\setupc.exe --wait 1 install PortName=-,EmuBR=yes,cts=rrts,dsr=rdtr,dcd=rdtr PortName=-,EmuBR=yes,cts=rrts,dsr=rdtr,dcd=rdtr
       - name: Set up Python
         id: python
         uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
@@ -627,7 +690,9 @@ jobs:
         run: |
           venv\Scripts\activate
           python -m serialx.tools.list_ports
-          pytest --timeout=20 --cov=serialx tests --adapter-pair CNCA0,CNCB0,no-buffer-control,no-rts-dtr-readback
+          pytest --timeout=20 --cov=serialx tests `
+            --adapter-pair CNCA0,CNCB0,no-buffer-control,no-rts-dtr-readback `
+            --adapter-pair CNCA1,CNCB1,no-buffer-control,no-rts-dtr-readback
       - name: Upload coverage artifact
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
