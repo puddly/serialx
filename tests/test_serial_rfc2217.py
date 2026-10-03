@@ -12,7 +12,8 @@ if sys.platform == "emscripten":
     )
 
 from serialx import Serial, SerialException, create_serial_connection
-from serialx.common import measure_time
+from serialx.common import PortSettingsUpdate, UnsupportedSetting, measure_time
+from serialx.platforms.serial_rfc2217 import Rfc2217
 from serialx.platforms.serial_rfc2217.types import (
     FlowcontrolResumeCmd,
     FlowcontrolSuspendCmd,
@@ -73,6 +74,13 @@ def test_flowcontrol_resume_roundtrip() -> None:
     cmd = FlowcontrolResumeCmd()
     assert cmd.to_bytes() == b""
     assert FlowcontrolResumeCmd.from_bytes(b"") == cmd
+
+
+def test_invalid_byte_size_rejected_before_sending() -> None:
+    """An invalid byte size fails locally instead of waiting for a server ack."""
+    engine = Rfc2217()
+    with pytest.raises(UnsupportedSetting):
+        list(engine.build_port_config_commands(PortSettingsUpdate(byte_size=123)))
 
 
 def test_sync_negotiate_timeout_silent_server() -> None:
