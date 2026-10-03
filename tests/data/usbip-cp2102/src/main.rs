@@ -17,11 +17,13 @@ use crate::cp2102::Sim;
 use crate::usbip::{op_req_import, Server, DEVICE_INFO_LEN, OP_REP_IMPORT, USB_SPEED_FULL};
 
 const VHCI: &str = "/sys/devices/platform/vhci_hcd.0";
-const SERIALS: [&str; 2] = ["left", "right"];
 
-/// Emulates a null-modem pair of CP2102 adapters over USB/IP.
+/// Emulates null-modem pairs of CP2102 adapters over USB/IP.
 #[derive(Parser)]
 struct Args {
+    /// Number of null-modem pairs to emulate. vhci_hcd has 8 high-speed ports, so at most 4.
+    #[arg(long, default_value_t = 1)]
+    pairs: usize,
     /// Address for the USB/IP server. Defaults to an ephemeral port, or 3240 with --serve-only.
     #[arg(long)]
     listen: Option<SocketAddr>,
@@ -104,10 +106,15 @@ async fn main() {
     let addr = listener.local_addr().unwrap();
     info!("usbip server on {addr}");
 
-    let server = Server::new(Sim::new(SERIALS), args.time_scale);
-    let devids = {
+    let server = Server::new(Sim::new(args.pairs), args.time_scale);
+    let (devices, serials): (Vec<(String, u32)>, Vec<String>) = {
         let sim = server.sim.lock().unwrap();
-        [sim.devid(0), sim.devid(1)]
+        (
+            (0..sim.chips.len())
+                .map(|i| (sim.chips[i].busid.clone(), sim.devid(i)))
+                .collect(),
+            sim.chips.iter().map(|c| c.serial.clone()).collect(),
+        )
     };
     tokio::spawn(server.clone().serve(listener));
 
@@ -117,17 +124,19 @@ async fn main() {
     }
 
     let (ports, ttys) = tokio::task::spawn_blocking(move || {
-        let ports = [
-            attach(addr, "1-1", devids[0]),
-            attach(addr, "1-2", devids[1]),
-        ];
-        let ttys = [wait_for_tty(SERIALS[0]), wait_for_tty(SERIALS[1])];
+        let ports: Vec<u32> = devices
+            .iter()
+            .map(|(busid, devid)| attach(addr, busid, *devid))
+            .collect();
+        let ttys: Vec<String> = serials.iter().map(|s| wait_for_tty(s)).collect();
         (ports, ttys)
     })
     .await
     .unwrap();
 
-    println!("{}\n{}", ttys[0], ttys[1]);
+    for tty in &ttys {
+        println!("{tty}");
+    }
 
     tokio::signal::ctrl_c().await.unwrap();
     for port in ports {
