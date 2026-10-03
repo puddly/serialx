@@ -76,6 +76,8 @@ pub struct Urb {
 struct PendingIn {
     seqnum: u32,
     length: usize,
+    /// Bytes the host controller has already pulled out of the FIFO for this URB
+    data: Vec<u8>,
 }
 
 #[derive(Debug)]
@@ -200,6 +202,11 @@ impl Chip {
             self.errors |= ERR_PARITY;
         }
         if self.rx.len() + encoded.len() > RX_BUF {
+            // The host controller keeps draining the FIFO into queued URBs
+            // while the wire catches up, so only overrun once those are full
+            self.fill_in();
+        }
+        if self.rx.len() + encoded.len() > RX_BUF {
             if self.errors & ERR_QUEUE_OVERRUN == 0 {
                 warn!("[{}] receive buffer overrun", self.serial);
             }
@@ -228,6 +235,43 @@ impl Chip {
                 self.send(usbip::ret_submit(seqnum, 0, len, &[]));
             }
         }
+    }
+
+    /// Moves received bytes out of the FIFO into queued bulk IN URBs, the way
+    /// a host controller keeps polling the endpoint while a URB is scheduled.
+    /// A URB that fills up completes on the spot; the FIFO can only overrun
+    /// once every queued URB is full.
+    fn fill_in(&mut self) {
+        while let Some(pending) = self.pending_in.front_mut() {
+            let n = (pending.length - pending.data.len()).min(self.rx.len());
+            if n == 0 {
+                break;
+            }
+            pending.data.extend(self.rx.drain(..n));
+            if pending.data.len() < pending.length {
+                break;
+            }
+            self.complete_front_in();
+        }
+    }
+
+    /// Completes the front URB with whatever it holds, as a short packet at the
+    /// end of a frame would. Called on each frame tick.
+    fn complete_in(&mut self) {
+        self.fill_in();
+        if self.pending_in.front().is_some_and(|p| !p.data.is_empty()) {
+            self.complete_front_in();
+        }
+    }
+
+    fn complete_front_in(&mut self) {
+        let pending = self.pending_in.pop_front().unwrap();
+        let n = pending.data.len();
+        debug!(
+            "[{}] bulk in #{} done: {n} bytes",
+            self.serial, pending.seqnum
+        );
+        self.send(usbip::ret_submit(pending.seqnum, 0, n, &pending.data));
     }
 
     fn send(&self, packet: Vec<u8>) {
@@ -358,7 +402,9 @@ impl Sim {
                 self.chips[dev].pending_in.push_back(PendingIn {
                     seqnum: urb.seqnum,
                     length: urb.length as usize,
-                })
+                    data: Vec::new(),
+                });
+                self.chips[dev].fill_in();
             }
             _ => {
                 warn!("urb to unknown endpoint {real_ep:#04x}");
@@ -471,17 +517,7 @@ impl Sim {
     pub fn step(&mut self, now: u64) {
         self.advance(now);
         for chip in &mut self.chips {
-            while let Some(pending) = chip.pending_in.front() {
-                if chip.rx.is_empty() {
-                    break;
-                }
-                let n = pending.length.min(chip.rx.len());
-                let data: Vec<u8> = chip.rx.drain(..n).collect();
-                let seqnum = pending.seqnum;
-                chip.pending_in.pop_front();
-                debug!("[{}] bulk in #{seqnum} done: {n} bytes", chip.serial);
-                chip.send(usbip::ret_submit(seqnum, 0, n, &data));
-            }
+            chip.complete_in();
             chip.fill_tx();
         }
     }
@@ -523,6 +559,7 @@ impl Sim {
                 for &b in &received {
                     chip.push_rx(b);
                 }
+                chip.fill_in();
             }
             while chip.inflight.front().is_some_and(|&end| end <= now) {
                 chip.inflight.pop_front();
