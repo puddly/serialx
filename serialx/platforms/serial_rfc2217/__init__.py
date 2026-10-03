@@ -295,6 +295,12 @@ class Rfc2217:
             yield SetBaudrateCmd(baudrate=update.baudrate)
 
         if update.byte_size is not None:
+            # Access servers ignore invalid sizes instead of rejecting them, so
+            # the client would wait out its connect timeout for an ack
+            if update.byte_size not in (5, 6, 7, 8):
+                raise UnsupportedSetting(
+                    f"Unsupported byte size {update.byte_size}, must be 5, 6, 7, or 8"
+                )
             yield SetDatasizeCmd(size=update.byte_size)
 
         if update.parity is not None:
