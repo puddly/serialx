@@ -505,6 +505,14 @@ def create_ser2net_pair(
 ) -> Iterator[tuple[str, str, Callable[[], None] | None, Callable[[], None] | None]]:
     """Create a pair of independent RFC2217 sockets using ser2net."""
 
+    # On close, ser2net restores the termios it found on open with TCSANOW once TIOCOUTQ
+    # is empty. USB adapters still hold bytes in their own TX FIFO then, and those go
+    # out at the restored baudrate. Earlier tests can leave a persistent device at any
+    # rate, so pin it to the one ser2net uses.
+    for adapter in (left_adapter, right_adapter):
+        with serialx.Serial.from_url(adapter, baudrate=115200):
+            pass
+
     # fmt: off
     proc = subprocess.Popen(
         [
