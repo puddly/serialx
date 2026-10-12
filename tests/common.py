@@ -454,10 +454,7 @@ def create_pyodide_pair() -> Iterator[tuple[str, str]]:
     """Create a fake Web Serial pair and register each side at a unique URL."""
     import js  # type: ignore[import-not-found]  # noqa: PLC0415
 
-    from serialx.platforms.serial_pyodide import (  # noqa: PLC0415
-        register_js_port,
-        unregister_js_port,
-    )
+    from serialx.platforms.serial_pyodide import register_js_port, unregister_js_port  # noqa: PLC0415
 
     global _PYODIDE_PAIR_COUNTER  # noqa: PLW0603
     _PYODIDE_PAIR_COUNTER += 1

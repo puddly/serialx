@@ -51,9 +51,7 @@ def _get_forced_posix_uri_schemes() -> list[str]:
     except ImportError:
         return []
 
-    from serialx.platforms.serial_extended_posix import (  # noqa: PLC0415
-        is_extended_posix,
-    )
+    from serialx.platforms.serial_extended_posix import is_extended_posix  # noqa: PLC0415
 
     result = ["posix://"]
 
