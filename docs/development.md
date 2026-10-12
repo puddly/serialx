@@ -1,12 +1,14 @@
 # Setup
-All development dependencies are listed in `pyproject.toml`. To install them, use:
+All development dependencies are listed in the `dev` dependency group in
+`pyproject.toml`. To install them into a `.venv` (activate it afterwards, or prefix
+commands with `uv run`), use:
 ```bash
-uv pip install '.[dev]'
+uv sync
 ```
 
 To include docs tooling as well:
 ```bash
-uv pip install '.[dev,docs]'
+uv sync --group docs
 ```
 
 On macOS and Windows, a Rust toolchain is required to build the native serial port

@@ -52,7 +52,7 @@ jobs:
           uv venv venv
           . venv/bin/activate
           uv pip install -U pip setuptools setuptools-rust prek
-          PYO3_USE_ABI3_FORWARD_COMPATIBILITY=1 uv pip install -e .[dev]
+          PYO3_USE_ABI3_FORWARD_COMPATIBILITY=1 uv pip install -e . --group dev
       - name: Cache base Python virtual environment
         if: steps.cache-venv.outputs.cache-hit != 'true'
         uses: actions/cache/save@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
@@ -524,7 +524,7 @@ jobs:
         run: |
           python -m venv venv
           . venv/bin/activate
-          pip install -e .[dev] pytest-cov
+          pip install -e . --group dev pytest-cov
       - name: Rebuild Rust extension
         if: steps.cache-venv.outputs.cache-hit == 'true' && steps.cache-ext.outputs.cache-hit != 'true'
         run: |
@@ -604,7 +604,7 @@ jobs:
         run: |
           python -m venv venv
           venv\Scripts\activate
-          pip install -e .[dev] pytest-cov
+          pip install -e . --group dev pytest-cov
       - name: Rebuild Rust extension
         if: steps.cache-venv.outputs.cache-hit == 'true' && steps.cache-ext.outputs.cache-hit != 'true'
         run: |
@@ -661,7 +661,7 @@ jobs:
       - name: Install serialx-compat and run tests
         run: |
           . venv/bin/activate
-          pip install -e serialx_compat[dev]
+          pip install -e serialx_compat
           pytest -q serialx_compat/tests
 
   pytest-pyodide:

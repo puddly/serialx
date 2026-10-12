@@ -6,7 +6,7 @@ create a fully functional remote serial port, similar to RFC2217 but with many q
 of life, performance, and security improvements.
 
 This platform requires the `aioesphomeapi <https://github.com/esphome/aioesphomeapi>`_
-package to be installed, provided by the ``esphome`` dependency group:
+package to be installed, provided by the ``esphome`` extra:
 
 .. code-block:: bash
 

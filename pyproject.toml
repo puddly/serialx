@@ -27,6 +27,8 @@ documentation = "https://puddly.github.io/serialx/"
 
 [project.optional-dependencies]
 esphome = ["aioesphomeapi>=46.5.0; python_version >= '3.11'"]
+
+[dependency-groups]
 dev = [
   "uv>=0.11.14",
   "ruff>=0.14.6",

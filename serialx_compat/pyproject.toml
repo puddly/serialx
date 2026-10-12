@@ -17,8 +17,6 @@ dependencies = [
 [project.optional-dependencies]
 esphome = ["serialx[esphome]"]
 
-dev = ["serialx[dev]"]
-
 [project.urls]
 Repository = "https://github.com/puddly/serialx"
 
