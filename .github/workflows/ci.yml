@@ -38,7 +38,7 @@ jobs:
         with:
           path: venv
           key: >-
-            1-${{ runner.os }}-base-venv-${{ steps.python.outputs.python-version }}-${{ hashFiles('pyproject.toml', 'setup.py', 'Cargo.toml', 'Cargo.lock', 'src/**') }}
+            1-${{ runner.os }}-base-venv-${{ steps.python.outputs.python-version }}-${{ hashFiles('pyproject.toml', 'uv.lock', 'setup.py', 'Cargo.toml', 'Cargo.lock', 'src/**') }}
       - name: Set up uv
         if: steps.cache-venv.outputs.cache-hit != 'true'
         uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
@@ -46,11 +46,10 @@ jobs:
           enable-cache: false
       - name: Create Python virtual environment
         if: steps.cache-venv.outputs.cache-hit != 'true'
-        run: |
-          uv venv venv
-          . venv/bin/activate
-          uv pip install -U pip setuptools prek
-          uv pip install -e . --group dev
+        env:
+          UV_PROJECT_ENVIRONMENT: venv
+          UV_PYTHON: ${{ steps.python.outputs.python-path }}
+        run: uv sync --locked
       - name: Cache base Python virtual environment
         if: steps.cache-venv.outputs.cache-hit != 'true'
         uses: actions/cache/save@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
@@ -80,7 +79,7 @@ jobs:
           fail-on-cache-miss: true
           path: venv
           key: >-
-            1-${{ runner.os }}-base-venv-${{ steps.python.outputs.python-version }}-${{ hashFiles('pyproject.toml', 'setup.py', 'Cargo.toml', 'Cargo.lock', 'src/**') }}
+            1-${{ runner.os }}-base-venv-${{ steps.python.outputs.python-version }}-${{ hashFiles('pyproject.toml', 'uv.lock', 'setup.py', 'Cargo.toml', 'Cargo.lock', 'src/**') }}
       - name: Restore prek environment from cache
         id: cache-prek
         uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
@@ -302,7 +301,7 @@ jobs:
           fail-on-cache-miss: true
           path: venv
           key: >-
-            1-${{ runner.os }}-base-venv-${{ steps.python.outputs.python-version }}-${{ hashFiles('pyproject.toml', 'setup.py', 'Cargo.toml', 'Cargo.lock', 'src/**') }}
+            1-${{ runner.os }}-base-venv-${{ steps.python.outputs.python-version }}-${{ hashFiles('pyproject.toml', 'uv.lock', 'setup.py', 'Cargo.toml', 'Cargo.lock', 'src/**') }}
       - name: Restore cached ser2net binary
         uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
         with:
@@ -438,7 +437,7 @@ jobs:
           fail-on-cache-miss: true
           path: venv
           key: >-
-            1-${{ runner.os }}-base-venv-${{ steps.python.outputs.python-version }}-${{ hashFiles('pyproject.toml', 'setup.py', 'Cargo.toml', 'Cargo.lock', 'src/**') }}
+            1-${{ runner.os }}-base-venv-${{ steps.python.outputs.python-version }}-${{ hashFiles('pyproject.toml', 'uv.lock', 'setup.py', 'Cargo.toml', 'Cargo.lock', 'src/**') }}
       - name: Restore cached ESPHome binary
         uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
         with:
@@ -564,7 +563,7 @@ jobs:
         with:
           path: venv
           key: >-
-            1-${{ runner.os }}-base-venv-${{ steps.python.outputs.python-version }}-${{ hashFiles('pyproject.toml', 'setup.py', 'Cargo.toml', 'Cargo.lock', 'src/**') }}
+            1-${{ runner.os }}-base-venv-${{ steps.python.outputs.python-version }}-${{ hashFiles('pyproject.toml', 'uv.lock', 'setup.py', 'Cargo.toml', 'Cargo.lock', 'src/**') }}
       - name: Restore cached Rust extension
         id: cache-ext
         uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
@@ -645,7 +644,7 @@ jobs:
         with:
           path: venv
           key: >-
-            1-${{ runner.os }}-base-venv-${{ steps.python.outputs.python-version }}-${{ hashFiles('pyproject.toml', 'setup.py', 'Cargo.toml', 'Cargo.lock', 'src/**') }}
+            1-${{ runner.os }}-base-venv-${{ steps.python.outputs.python-version }}-${{ hashFiles('pyproject.toml', 'uv.lock', 'setup.py', 'Cargo.toml', 'Cargo.lock', 'src/**') }}
       - name: Restore cached Rust extension
         id: cache-ext
         uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
@@ -716,11 +715,11 @@ jobs:
           fail-on-cache-miss: true
           path: venv
           key: >-
-            1-${{ runner.os }}-base-venv-${{ steps.python.outputs.python-version }}-${{ hashFiles('pyproject.toml', 'setup.py', 'Cargo.toml', 'Cargo.lock', 'src/**') }}
+            1-${{ runner.os }}-base-venv-${{ steps.python.outputs.python-version }}-${{ hashFiles('pyproject.toml', 'uv.lock', 'setup.py', 'Cargo.toml', 'Cargo.lock', 'src/**') }}
       - name: Install serialx-compat and run tests
         run: |
           . venv/bin/activate
-          pip install -e serialx_compat
+          uv pip install -e serialx_compat
           pytest -q serialx_compat/tests
 
   pytest-pyodide:
@@ -775,13 +774,13 @@ jobs:
           fail-on-cache-miss: true
           path: venv
           key: >-
-            1-${{ runner.os }}-base-venv-${{ steps.python.outputs.python-version }}-${{ hashFiles('pyproject.toml', 'setup.py', 'Cargo.toml', 'Cargo.lock', 'src/**') }}
+            1-${{ runner.os }}-base-venv-${{ steps.python.outputs.python-version }}-${{ hashFiles('pyproject.toml', 'uv.lock', 'setup.py', 'Cargo.toml', 'Cargo.lock', 'src/**') }}
       - name: Download all coverage artifacts
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
       - name: Combine coverage results
         run: |
           . venv/bin/activate
-          pip install coverage
+          uv pip install coverage
           coverage combine coverage*/.coverage*
           coverage report
           coverage xml
