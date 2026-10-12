@@ -15,14 +15,14 @@ repo = "local"
 [[repos.hooks]]
 id = "codespell"
 name = "codespell"
-entry = "uv run --frozen codespell --toml pyproject.toml"
+entry = "uv run --frozen --extra dev codespell --toml pyproject.toml"
 language = "system"
 types = ["text"]
 
 [[repos.hooks]]
 id = "ruff-check"
 name = "ruff check"
-entry = "uv run --frozen ruff check --force-exclude --fix"
+entry = "uv run --frozen --extra dev ruff check --force-exclude --fix"
 language = "system"
 types_or = ["python", "pyi"]
 require_serial = true
@@ -30,7 +30,7 @@ require_serial = true
 [[repos.hooks]]
 id = "ruff-format"
 name = "ruff format"
-entry = "uv run --frozen ruff format --force-exclude"
+entry = "uv run --frozen --extra dev ruff format --force-exclude"
 language = "system"
 types_or = ["python", "pyi"]
 require_serial = true
@@ -64,7 +64,7 @@ repo = "local"
 [[repos.hooks]]
 id = "mypy"
 name = "mypy"
-entry = "uv run --frozen mypy"
+entry = "uv run --frozen --extra dev mypy"
 language = "system"
 types_or = ["python", "pyi"]
 exclude = '^tests/esphome/external_components/'
@@ -73,7 +73,7 @@ require_serial = true
 [[repos.hooks]]
 id = "pylint"
 name = "pylint"
-entry = "uv run --frozen pylint serialx/"
+entry = "uv run --frozen --extra dev pylint serialx/"
 language = "system"
 types = ["python"]
 pass_filenames = false
