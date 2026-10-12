@@ -2,7 +2,7 @@
 requires = [
   "setuptools>=80",
   "setuptools-scm[simple]>=8",
-  "setuptools-rust>=1.7.0",
+  "setuptools-rust>=1.7.0; sys_platform == 'win32' or sys_platform == 'darwin'",
 ]
 build-backend = "setuptools.build_meta"
 
@@ -61,12 +61,6 @@ docs = [
 include = ["serialx", "serialx.*"]
 
 [tool.setuptools_scm]
-
-[[tool.setuptools-rust.ext-modules]]
-target = "serialx._serialx_rust"
-path = "Cargo.toml"
-binding = "PyO3"
-optional = true
 
 [tool.distutils.bdist_wheel]
 py_limited_api = "cp310"
