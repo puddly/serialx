@@ -86,7 +86,7 @@ jobs:
         with:
           path: ~/.cache/prek
           key: |
-            1-${{ runner.os }}-prek-${{ hashFiles('prek.toml') }}
+            1-${{ runner.os }}-prek-${{ hashFiles('prek.toml', 'uv.lock') }}
       - name: Install prek hooks
         if: steps.cache-prek.outputs.cache-hit != 'true'
         run: |
