@@ -39,12 +39,6 @@ jobs:
           path: venv
           key: >-
             1-${{ runner.os }}-base-venv-${{ steps.python.outputs.python-version }}-${{ hashFiles('pyproject.toml', 'setup.py', 'Cargo.toml', 'Cargo.lock', 'src/**') }}
-      - name: Install system dependencies
-        if: steps.cache-venv.outputs.cache-hit != 'true'
-        run: sudo apt-get update && sudo apt-get install -y libudev-dev
-      - name: Set up Rust
-        if: steps.cache-venv.outputs.cache-hit != 'true'
-        run: rustup default stable && rustup update stable
       - name: Set up uv
         if: steps.cache-venv.outputs.cache-hit != 'true'
         uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
@@ -55,8 +49,8 @@ jobs:
         run: |
           uv venv venv
           . venv/bin/activate
-          uv pip install -U pip setuptools setuptools-rust prek
-          PYO3_USE_ABI3_FORWARD_COMPATIBILITY=1 uv pip install -e . --group dev
+          uv pip install -U pip setuptools prek
+          uv pip install -e . --group dev
       - name: Cache base Python virtual environment
         if: steps.cache-venv.outputs.cache-hit != 'true'
         uses: actions/cache/save@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
@@ -87,8 +81,6 @@ jobs:
           path: venv
           key: >-
             1-${{ runner.os }}-base-venv-${{ steps.python.outputs.python-version }}-${{ hashFiles('pyproject.toml', 'setup.py', 'Cargo.toml', 'Cargo.lock', 'src/**') }}
-      - name: Install system dependencies
-        run: sudo apt-get update && sudo apt-get install -y libudev-dev
       - name: Restore prek environment from cache
         id: cache-prek
         uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
@@ -341,7 +333,7 @@ jobs:
       - name: Install system dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y socat libudev-dev
+          sudo apt-get install -y socat
       - name: Start CP2102 emulator
         run: |
           sudo insmod tests/data/usbip-cp2102/modules/usbserial.ko
@@ -475,7 +467,7 @@ jobs:
       - name: Install system dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y socat libudev-dev
+          sudo apt-get install -y socat
       - name: Start CP2102 emulator
         run: |
           sudo insmod tests/data/usbip-cp2102/modules/usbserial.ko
