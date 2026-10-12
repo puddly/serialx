@@ -45,10 +45,14 @@ jobs:
       - name: Set up Rust
         if: steps.cache-venv.outputs.cache-hit != 'true'
         run: rustup default stable && rustup update stable
+      - name: Set up uv
+        if: steps.cache-venv.outputs.cache-hit != 'true'
+        uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+        with:
+          enable-cache: false
       - name: Create Python virtual environment
         if: steps.cache-venv.outputs.cache-hit != 'true'
         run: |
-          curl -LsSf https://astral.sh/uv/install.sh | sh
           uv venv venv
           . venv/bin/activate
           uv pip install -U pip setuptools setuptools-rust prek
@@ -203,13 +207,17 @@ jobs:
         uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
         with:
           python-version: "3.13"
+      - name: Set up uv
+        if: steps.cache-esphome.outputs.cache-hit != 'true'
+        uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+        with:
+          enable-cache: false
       - name: Compile ESPHome host daemon
         if: steps.cache-esphome.outputs.cache-hit != 'true'
         env:
           PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION: python
           ESPHOME_REF: ${{ matrix.esphome.ref }}
         run: |
-          curl -LsSf https://astral.sh/uv/install.sh | sh
           uv venv esphome-venv
           . esphome-venv/bin/activate
           if [[ "$ESPHOME_REF" =~ ^[0-9a-f]{40}$ ]]; then
@@ -342,9 +350,6 @@ jobs:
           sudo tests/data/usbip-cp2102/target/release/usbip-cp2102 > ports.txt 2> emulator.log &
           timeout 30 sh -c 'until [ "$(wc -l < ports.txt)" -ge 2 ]; do sleep 0.2; done'
           sudo chmod 666 $(cat ports.txt)
-      - name: Set up uv
-        run: |
-          curl -LsSf https://astral.sh/uv/install.sh | sh
       - name: Register Python problem matcher
         run: |
           echo "::add-matcher::.github/workflows/matchers/python.json"
@@ -448,9 +453,6 @@ jobs:
           sudo tests/data/usbip-cp2102/target/release/usbip-cp2102 > ports.txt 2> emulator.log &
           timeout 30 sh -c 'until [ "$(wc -l < ports.txt)" -ge 2 ]; do sleep 0.2; done'
           sudo chmod 666 $(cat ports.txt)
-      - name: Set up uv
-        run: |
-          curl -LsSf https://astral.sh/uv/install.sh | sh
       - name: Register Python problem matcher
         run: |
           echo "::add-matcher::.github/workflows/matchers/python.json"
