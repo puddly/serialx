@@ -375,14 +375,9 @@ jobs:
       - name: Register Python problem matcher
         run: |
           echo "::add-matcher::.github/workflows/matchers/python.json"
-      - name: Install Pytest Annotation plugin
-        run: |
-          . venv/bin/activate
-          uv pip install pytest-github-actions-annotate-failures
       - name: Run pytest
         run: |
           . venv/bin/activate
-          uv pip install pytest-xdist pytest-cov
           python -m serialx.tools.list_ports
           pytest \
             -n auto \
@@ -509,16 +504,11 @@ jobs:
       - name: Register Python problem matcher
         run: |
           echo "::add-matcher::.github/workflows/matchers/python.json"
-      - name: Install Pytest Annotation plugin
-        run: |
-          . venv/bin/activate
-          uv pip install pytest-github-actions-annotate-failures
       - name: Run pytest
         env:
           ESPHOME_API_VERSION: ${{ matrix.esphome.api }}
         run: |
           . venv/bin/activate
-          uv pip install pytest-xdist pytest-cov
           pytest \
             -n auto \
             -qq \
@@ -780,7 +770,6 @@ jobs:
       - name: Combine coverage results
         run: |
           . venv/bin/activate
-          uv pip install coverage
           coverage combine coverage*/.coverage*
           coverage report
           coverage xml
