@@ -1,7 +1,9 @@
 """Pyserial compatibility module."""
 
+import argparse
 from collections.abc import Iterable
 import re
+from urllib.parse import urlparse
 
 from serialx import SerialPortInfo, list_serial_ports
 
@@ -19,5 +21,18 @@ comports = list_serial_ports
 __all__ = ["comports", "grep"]
 
 if __name__ == "__main__":
-    for port in comports():
+    parser = argparse.ArgumentParser(description="List serial ports.")
+    parser.add_argument(
+        "uri",
+        nargs="?",
+        help="List the ports behind a URI, such as `esphome://`",
+    )
+    args = parser.parse_args()
+
+    if args.uri is None:
+        ports = comports()
+    else:
+        ports = list_serial_ports(urlparse(args.uri).scheme, path=args.uri)
+
+    for port in ports:
         print(port)  # noqa: T201
