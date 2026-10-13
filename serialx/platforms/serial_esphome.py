@@ -56,6 +56,7 @@ from aioesphomeapi.model import (
     SerialProxyParity,
     SerialProxyRequestResponse,
     SerialProxyStatus,
+    UsbSerialDriver,
 )
 from typing_extensions import Buffer, Unpack
 
@@ -158,6 +159,11 @@ def identity_port_info(
         bcd_device=identity.usb.bcd_device if has_usb else None,
         interface_description=interface_description,
         interface_num=identity.usb.interface_number if has_usb else None,
+        port_number=(
+            identity.usb.port_number
+            if has_usb and identity.usb.driver is UsbSerialDriver.VENDOR
+            else None
+        ),
     )
 
 

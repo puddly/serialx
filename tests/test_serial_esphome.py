@@ -32,6 +32,7 @@ from aioesphomeapi.model import (
     SerialProxyRequestResponse,
     SerialProxyStatus,
     UsbDeviceDescriptor,
+    UsbSerialDriver,
 )
 
 from serialx import (
@@ -45,6 +46,7 @@ from serialx import (
     create_serial_connection,
     list_serial_ports,
     redact_uri,
+    udev_serial_by_id_stem,
 )
 from serialx.platforms.serial_esphome import (
     ESPHOME_DEFAULT_PORT,
@@ -53,6 +55,7 @@ from serialx.platforms.serial_esphome import (
     ESPHomeSerialTransport,
     InvalidSettingsError,
     SerialProxyModeName,
+    identity_port_info,
 )
 
 from .common import ESPHOME_HOST_BINARY, create_esphome_pair, create_socat_pair
@@ -933,11 +936,59 @@ def _identity(**overrides: object) -> SerialProxyIdentity:
         "product": "ZBT-2",
         "serial_number": "AABBCCDDEEFF",
         "usb": UsbDeviceDescriptor(  # type:ignore[call-arg]
-            vendor_id=0x303A, product_id=0x4001, bcd_device=0x0101, interface_number=0
+            vendor_id=0x303A,
+            product_id=0x4001,
+            bcd_device=0x0101,
+            interface_number=0,
         ),
     }
     fields.update(overrides)
     return SerialProxyIdentity(**fields)
+
+
+@pytest.mark.parametrize(
+    ("driver", "port_number", "udev_id"),
+    [
+        pytest.param(
+            UsbSerialDriver.CLASS,
+            0,
+            "usb-Nabu_Casa_ZBT-2_AABBCCDDEEFF-if00",
+            id="class",
+        ),
+        pytest.param(
+            UsbSerialDriver.VENDOR,
+            0,
+            "usb-Nabu_Casa_ZBT-2_AABBCCDDEEFF-if00-port0",
+            id="vendor",
+        ),
+        pytest.param(
+            UsbSerialDriver.VENDOR,
+            2,
+            "usb-Nabu_Casa_ZBT-2_AABBCCDDEEFF-if00-port2",
+            id="vendor_multiplexed",
+        ),
+    ],
+)
+def test_identity_udev_id_follows_driver(
+    driver: UsbSerialDriver, port_number: int, udev_id: str
+) -> None:
+    """A vendor driver's port index ends up in the name, a class driver's does not."""
+    identity = _identity(
+        usb=UsbDeviceDescriptor(  # type:ignore[call-arg]
+            vendor_id=0x303A,
+            product_id=0x4001,
+            bcd_device=0x0101,
+            interface_number=0,
+            driver=driver,
+            port_number=port_number,
+        )
+    )
+    port = identity_port_info(identity, interface_description="Zigbee")
+
+    assert port.port_number == (
+        port_number if driver is UsbSerialDriver.VENDOR else None
+    )
+    assert udev_serial_by_id_stem(port) == udev_id
 
 
 async def test_serial_number_match_allows_connection() -> None:
