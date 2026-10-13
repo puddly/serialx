@@ -38,6 +38,7 @@ from serialx import (
     Platform,
     SerialException,
     SerialPortInfo,
+    UnsupportedSetting,
     async_list_serial_ports,
     async_serial_for_url,
     list_serial_ports,
@@ -782,12 +783,11 @@ async def test_mode_raw_is_sent_explicitly(query: str) -> None:
     ]
 
 
-@pytest.mark.parametrize("query", ["", "&mode=protocol"])
-async def test_mode_skipped_on_old_device(query: str) -> None:
+async def test_mode_skipped_on_old_device() -> None:
     """A device predating API 1.17 never answers set-mode, so it is not sent."""
     api = mock_api_client("Zigbee")
     api.api_version = APIVersion(1, 16)
-    url = f"esphome://127.0.0.1:6053/?port_name=Zigbee{query}"
+    url = "esphome://127.0.0.1:6053/?port_name=Zigbee"
 
     with patch("serialx.platforms.serial_esphome.APIClient", return_value=api):
         async with async_serial_for_url(url=url, baudrate=115200) as serial:
@@ -806,6 +806,47 @@ async def test_mode_skipped_on_old_device(query: str) -> None:
             data_size=8,
         ),
     ]
+
+
+async def test_mode_protocol_refused_on_old_device() -> None:
+    """`protocol` on a device predating modes fails rather than falling back to raw."""
+    api = mock_api_client("Zigbee")
+    api.api_version = APIVersion(1, 16)
+    url = "esphome://127.0.0.1:6053/?port_name=Zigbee&mode=protocol"
+
+    with patch("serialx.platforms.serial_esphome.APIClient", return_value=api):
+        with pytest.raises(UnsupportedSetting, match="needs API 1.17"):
+            async with async_serial_for_url(url=url, baudrate=115200):
+                pass
+
+    assert proxy_calls(api) == [
+        call.subscribe_serial_proxy_data(ANY),
+        call.serial_proxy_subscribe_await_response(0, timeout=ANY),
+    ]
+    assert api.disconnect.mock_calls == [call()]
+
+
+async def test_mode_protocol_refused_without_tap() -> None:
+    """A port with no tap refuses `protocol`, and that refusal is not a fallback."""
+    api = mock_api_client("Zigbee")
+    api.serial_proxy_set_mode_await_response.return_value = SerialProxyRequestResponse(  # type:ignore[call-arg]
+        status=SerialProxyStatus.NOT_SUPPORTED
+    )
+    url = "esphome://127.0.0.1:6053/?port_name=Zigbee&mode=protocol"
+
+    with patch("serialx.platforms.serial_esphome.APIClient", return_value=api):
+        with pytest.raises(UnsupportedSetting, match="has no tap"):
+            async with async_serial_for_url(url=url, baudrate=115200):
+                pass
+
+    assert proxy_calls(api) == [
+        call.subscribe_serial_proxy_data(ANY),
+        call.serial_proxy_subscribe_await_response(0, timeout=ANY),
+        call.serial_proxy_set_mode_await_response(
+            instance=0, mode=SerialProxyMode.PROTOCOL, timeout=ANY
+        ),
+    ]
+    assert api.disconnect.mock_calls == [call()]
 
 
 async def test_invalid_mode_in_url() -> None:

@@ -55,6 +55,8 @@ reader, writer = await serialx.open_serial_connection(
 
 The mode is applied before the proxy starts streaming. Only `raw` (the default) and `protocol` are accepted; any other value is rejected. Which protocol `protocol` engages depends on the tap the device's configuration gives that port.
 
+Asking for `protocol` on a port with no tap, or of a device too old to have modes, raises `serialx.UnsupportedSetting` instead of opening the port. A client that asked for the mode is not going to do that protocol's work itself, so plain bytes are not a fallback it can use.
+
 ## Reusing an existing API client
 If your application already holds an `aioesphomeapi.APIClient`, pass it to the transport directly to avoid opening a second connection:
 

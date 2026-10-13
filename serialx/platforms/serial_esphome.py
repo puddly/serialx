@@ -299,7 +299,9 @@ class ESPHomeSerial(BaseSerial):
 
                 .. deprecated:: 1.2.0
             mode: The mode the serial proxy should use, either `raw` (the default)
-                or `protocol` to engage the port's protocol-aware tap.
+                or `protocol` to engage the port's protocol-aware tap. Opening fails
+                if `protocol` is asked of a port with no tap, or of a device too old
+                to have modes.
             key: The Noise PSK to use when creating an `aioesphomeapi.APIClient`
                 instance.
             password: The API password to use when creating an `aioesphomeapi.APIClient`
@@ -549,7 +551,8 @@ class ESPHomeSerial(BaseSerial):
     def tap_mode(self) -> SerialProxyModeName | None:
         """The mode the device confirmed for this port, or `None` before subscribing.
 
-        `raw` means the port has no tap, so a client must do the protocol's work itself.
+        Once subscribed, this is the mode that was asked for: `protocol` is never quietly
+        downgraded to `raw`, opening fails instead.
         """
         return self._active_mode
 
@@ -898,6 +901,13 @@ class ESPHomeSerial(BaseSerial):
         # Older devices have no mode at all and never answer the request
         version = self._api.api_version
         if version is None or version < MIN_VERSION_SERIAL_PROXY_SET_MODE:
+            if self._mode is not SerialProxyModeName.RAW:
+                required = MIN_VERSION_SERIAL_PROXY_SET_MODE
+                raise UnsupportedSetting(
+                    f"Serial proxy {self._port_name!r} cannot be put in"
+                    f" {self._mode.value!r} mode: that needs API {required.major}"
+                    f".{required.minor}, the device runs {version}"
+                )
             self._active_mode = SerialProxyModeName.RAW
             return
 
@@ -911,13 +921,18 @@ class ESPHomeSerial(BaseSerial):
             )
         )
 
-        # A port with no tap refuses PROTOCOL; that is a fact about the port, not a failure
+        # A port with no tap refuses PROTOCOL. A client asked for it because it will not
+        # do that protocol's work itself, so raw bytes are not a fallback it can use
         if response.status is SerialProxyStatus.NOT_SUPPORTED:
-            self._active_mode = SerialProxyModeName.RAW
-        elif (factory := STATUS_TO_ERROR_MAP.get(response.status)) is not None:
+            raise UnsupportedSetting(
+                f"Serial proxy {self._port_name!r} has no tap for"
+                f" {self._mode.value!r} mode"
+            )
+
+        if (factory := STATUS_TO_ERROR_MAP.get(response.status)) is not None:
             raise factory(f"cannot set the mode of serial proxy {self._port_name!r}")
-        else:
-            self._active_mode = self._mode
+
+        self._active_mode = self._mode
 
     def _unsubscribe_instance(self) -> None:
         """Unsubscribe serial proxy streaming for this instance if supported."""
