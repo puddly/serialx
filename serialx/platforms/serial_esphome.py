@@ -701,12 +701,12 @@ class ESPHomeSerial(BaseSerial):
             query = {}
             if info.serial_number is None:
                 query["port_name"] = proxy.name
-            else:
-                query["port_serial_number"] = info.serial_number
 
             udev_id = udev_serial_by_id_stem(info)
             if udev_id is not None:
                 query["port_udev_id"] = udev_id
+            elif info.serial_number is not None:
+                query["port_serial_number"] = info.serial_number
 
             url = urllib.parse.urlunparse(
                 urllib.parse.ParseResult(

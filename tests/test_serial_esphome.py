@@ -1105,8 +1105,7 @@ async def test_list_serial_ports_reports_identity() -> None:
     base = "esphome://127.0.0.1:6053/?port_name="
     # A device with a serial number is found by it, not by the port it is on
     zbt2_url = (
-        "esphome://127.0.0.1:6053/?port_serial_number=AABBCCDDEEFF"
-        "&port_udev_id=usb-Nabu_Casa_ZBT-2_AABBCCDDEEFF-if00"
+        "esphome://127.0.0.1:6053/?port_udev_id=usb-Nabu_Casa_ZBT-2_AABBCCDDEEFF-if00"
     )
     empty = {
         "vid": None,
