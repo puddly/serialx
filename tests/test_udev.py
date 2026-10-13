@@ -21,6 +21,7 @@ def _usb_port(**overrides: Any) -> SerialPortInfo:
         "bcd_device": 0x0100,
         "interface_description": "Nabu Casa ZBT-2",
         "interface_num": 0,
+        "port_number": None,
     }
     fields.update(overrides)
     return SerialPortInfo(**fields)
@@ -31,6 +32,9 @@ def _usb_port(**overrides: Any) -> SerialPortInfo:
     [
         ({}, "usb-Nabu_Casa_ZBT-2_10B41DE589E4-if00"),
         ({"interface_num": 10}, "usb-Nabu_Casa_ZBT-2_10B41DE589E4-if0a"),
+        # A `usb-serial` driver numbers its ports, a class driver does not
+        ({"port_number": 0}, "usb-Nabu_Casa_ZBT-2_10B41DE589E4-if00-port0"),
+        ({"port_number": 3}, "usb-Nabu_Casa_ZBT-2_10B41DE589E4-if00-port3"),
         # Missing strings fall back to the IDs as sysfs spells them
         (
             {"manufacturer": None, "product": None, "serial_number": None},

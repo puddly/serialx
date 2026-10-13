@@ -11,7 +11,6 @@ if sys.platform not in ("linux", "darwin"):
     pytest.skip("Linux-only tests", allow_module_level=True)
 
 from pathlib import Path
-import re
 import shutil
 from unittest.mock import patch
 
@@ -55,6 +54,7 @@ def test_replay_debian_12_kernel_6_1(
             bcd_device=None,
             interface_description=None,
             interface_num=None,
+            port_number=None,
         ),
     ]
 
@@ -80,6 +80,7 @@ def test_replay_debian_13_kernel_6_12(
             bcd_device=0x0100,
             interface_description="Nabu Casa ZBT-2",
             interface_num=0,
+            port_number=None,
         ),
         SerialPortInfo(
             device=str(dev_root / "ttyS0"),
@@ -92,6 +93,7 @@ def test_replay_debian_13_kernel_6_12(
             bcd_device=None,
             interface_description=None,
             interface_num=None,
+            port_number=None,
         ),
         SerialPortInfo(
             device=str(
@@ -107,6 +109,7 @@ def test_replay_debian_13_kernel_6_12(
             bcd_device=0x0100,
             interface_description="CP2102 USB to UART Bridge Controller",
             interface_num=0,
+            port_number=0,
         ),
         SerialPortInfo(
             device=str(
@@ -122,6 +125,7 @@ def test_replay_debian_13_kernel_6_12(
             bcd_device=0x0100,
             interface_description=None,
             interface_num=0,
+            port_number=0,
         ),
         SerialPortInfo(
             device=str(by_id / "usb-FTDI_FT232R_USB_UART_A5069RR4-if00-port0"),
@@ -134,6 +138,7 @@ def test_replay_debian_13_kernel_6_12(
             bcd_device=0x0600,
             interface_description="FT232R USB UART",
             interface_num=0,
+            port_number=0,
         ),
         SerialPortInfo(
             device=str(dev_root / "ttyUSB3"),
@@ -146,6 +151,7 @@ def test_replay_debian_13_kernel_6_12(
             bcd_device=0x0600,
             interface_description="FT232R USB UART",
             interface_num=0,
+            port_number=0,
         ),
         SerialPortInfo(
             device=str(by_id / "usb-FTDI_FT232R_USB_UART_rutabaga-if00-port0"),
@@ -158,6 +164,7 @@ def test_replay_debian_13_kernel_6_12(
             bcd_device=0x0600,
             interface_description="FT232R USB UART",
             interface_num=0,
+            port_number=0,
         ),
         SerialPortInfo(
             device=str(
@@ -173,6 +180,7 @@ def test_replay_debian_13_kernel_6_12(
             bcd_device=0x0605,
             interface_description=None,
             interface_num=0,
+            port_number=0,
         ),
     ]
 
@@ -198,6 +206,7 @@ def test_replay_haos_x86_kernel_6_12(
             bcd_device=0x0101,
             interface_description="Nabu Casa ZBT-2",
             interface_num=0,
+            port_number=None,
         ),
         SerialPortInfo(
             device=str(by_id / "usb-Nabu_Casa_ZBT-2_10B41DE58A2C-if00"),
@@ -210,6 +219,7 @@ def test_replay_haos_x86_kernel_6_12(
             bcd_device=0x0100,
             interface_description="Nabu Casa ZBT-2",
             interface_num=0,
+            port_number=None,
         ),
     ]
 
@@ -234,6 +244,7 @@ def test_replay_haos_yellow_kernel_6_6(
             bcd_device=None,
             interface_description=None,
             interface_num=None,
+            port_number=None,
         )
         for name in ("ttyAMA0", "ttyAMA1", "ttyAMA10", "ttyAMA2")
     ]
@@ -434,6 +445,7 @@ def test_replay_github_actions_ubuntu_24_04_kernel_6_17(
             bcd_device=None,
             interface_description=None,
             interface_num=None,
+            port_number=None,
         ),
         SerialPortInfo(
             device=str(dev_root / "ttyS1"),
@@ -446,6 +458,7 @@ def test_replay_github_actions_ubuntu_24_04_kernel_6_17(
             bcd_device=None,
             interface_description=None,
             interface_num=None,
+            port_number=None,
         ),
     ]
 
@@ -496,10 +509,7 @@ def test_udev_serial_by_id_stem_matches_recorded_links(
     links = _recorded_by_id_links(dump)
 
     for port in ports:
-        expected = {
-            re.sub(r"-port\d+$", "", link)
-            for link in links[Path(port.resolved_device).name]
-        }
+        expected = links[Path(port.resolved_device).name]
         stem = udev_serial_by_id_stem(port)
 
         assert expected == (set() if stem is None else {stem})

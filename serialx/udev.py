@@ -78,10 +78,11 @@ def _udev_replace_chars(value: bytes) -> bytes:
 
 
 def udev_serial_by_id_stem(port: SerialPortInfo) -> str | None:
-    """Compute the `/dev/serial/by-id/` link name udev gives a USB port, without `-portN`.
+    """Compute the `/dev/serial/by-id/` link name udev gives a USB port.
 
-    udev appends `-port{N}` only when a `usb-serial` driver binds the port, not for CDC
-    ACM. Which one binds cannot be known from the port, so it is left out.
+    udev appends `-port{N}` only when a `usb-serial` driver binds the port, N being the
+    port's index within that driver. A class driver such as CDC ACM binds the interface
+    itself and gets no suffix.
     """
 
     if port.interface_num is None:
@@ -118,4 +119,9 @@ def udev_serial_by_id_stem(port: SerialPortInfo) -> str | None:
                 id_serial += b"_" + serial
 
     # `ID_SERIAL` is built in a 256 byte buffer
-    return f"usb-{id_serial[:255].decode('utf-8')}-if{port.interface_num:02x}"
+    stem = f"usb-{id_serial[:255].decode('utf-8')}-if{port.interface_num:02x}"
+
+    if port.port_number is not None:
+        stem += f"-port{port.port_number}"
+
+    return stem

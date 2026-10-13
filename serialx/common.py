@@ -1545,6 +1545,9 @@ class SerialPortInfo:
     bcd_device: int | None
     interface_description: str | None
     interface_num: int | None
+    # Index among the ports a vendor driver exposes on `interface_num`, which udev puts
+    # in the port's name. `None` under a class driver, which binds the interface itself.
+    port_number: int | None = None
 
     def __getitem__(self, key: int | slice) -> str | None:
         """Compatibility shim for `serial.tools.list_ports_common.ListPortInfo`."""

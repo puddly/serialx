@@ -391,6 +391,7 @@ def linux_list_serial_ports() -> list[SerialPortInfo]:
                 interface_num = int(
                     (usb_interface / "bInterfaceNumber").read_text(), 16
                 )
+                port_number = int((resolved / "port_number").read_text())
             except OSError:
                 LOGGER.debug(
                     "Serial device %r disappeared during iteration", usb_device
@@ -408,6 +409,7 @@ def linux_list_serial_ports() -> list[SerialPortInfo]:
                 bcd_device=bcd_device,
                 interface_description=_read_optional_sysfs(usb_interface / "interface"),
                 interface_num=interface_num,
+                port_number=port_number,
             )
         elif subsystem == "usb":
             # CDC ACM devices
@@ -436,6 +438,7 @@ def linux_list_serial_ports() -> list[SerialPortInfo]:
                 bcd_device=bcd_device,
                 interface_description=_read_optional_sysfs(usb_interface / "interface"),
                 interface_num=interface_num,
+                port_number=None,
             )
         elif subsystem in ("serial-base", "platform", "pnp", "amba"):
             # `serial-base` is the per-port subsystem introduced in Linux 6.10.
@@ -465,6 +468,7 @@ def linux_list_serial_ports() -> list[SerialPortInfo]:
                 bcd_device=None,
                 interface_description=None,
                 interface_num=None,
+                port_number=None,
             )
         else:
             LOGGER.warning(
