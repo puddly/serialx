@@ -36,7 +36,7 @@ jobs:
         id: cache-venv
         uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
         with:
-          path: venv
+          path: .venv
           key: >-
             1-${{ runner.os }}-base-venv-${{ steps.python.outputs.python-version }}-${{ hashFiles('pyproject.toml', 'uv.lock', 'setup.py', 'Cargo.toml', 'Cargo.lock', 'src/**') }}
       - name: Set up uv
@@ -47,14 +47,13 @@ jobs:
       - name: Create Python virtual environment
         if: steps.cache-venv.outputs.cache-hit != 'true'
         env:
-          UV_PROJECT_ENVIRONMENT: venv
           UV_PYTHON: ${{ steps.python.outputs.python-path }}
         run: uv sync --locked
       - name: Cache base Python virtual environment
         if: steps.cache-venv.outputs.cache-hit != 'true'
         uses: actions/cache/save@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
         with:
-          path: venv
+          path: .venv
           key: ${{ steps.cache-venv.outputs.cache-primary-key }}
 
   prek:
@@ -77,7 +76,7 @@ jobs:
         uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
         with:
           fail-on-cache-miss: true
-          path: venv
+          path: .venv
           key: >-
             1-${{ runner.os }}-base-venv-${{ steps.python.outputs.python-version }}-${{ hashFiles('pyproject.toml', 'uv.lock', 'setup.py', 'Cargo.toml', 'Cargo.lock', 'src/**') }}
       - name: Restore prek environment from cache
@@ -90,7 +89,7 @@ jobs:
       - name: Install prek hooks
         if: steps.cache-prek.outputs.cache-hit != 'true'
         run: |
-          . venv/bin/activate
+          . .venv/bin/activate
           prek prepare-hooks
       - name: Cache prek environment
         if: steps.cache-prek.outputs.cache-hit != 'true'
@@ -102,7 +101,7 @@ jobs:
         env:
           SKIP: no-commit-to-branch
         run: |
-          . venv/bin/activate
+          . .venv/bin/activate
           prek run --show-diff-on-failure --color=always --all-files
 
   build-ser2net:
@@ -299,7 +298,7 @@ jobs:
         uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
         with:
           fail-on-cache-miss: true
-          path: venv
+          path: .venv
           key: >-
             1-${{ runner.os }}-base-venv-${{ steps.python.outputs.python-version }}-${{ hashFiles('pyproject.toml', 'uv.lock', 'setup.py', 'Cargo.toml', 'Cargo.lock', 'src/**') }}
       - name: Restore cached ser2net binary
@@ -377,7 +376,7 @@ jobs:
           echo "::add-matcher::.github/workflows/matchers/python.json"
       - name: Run pytest
         run: |
-          . venv/bin/activate
+          . .venv/bin/activate
           python -m serialx.tools.list_ports
           pytest \
             -n auto \
@@ -430,7 +429,7 @@ jobs:
         uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
         with:
           fail-on-cache-miss: true
-          path: venv
+          path: .venv
           key: >-
             1-${{ runner.os }}-base-venv-${{ steps.python.outputs.python-version }}-${{ hashFiles('pyproject.toml', 'uv.lock', 'setup.py', 'Cargo.toml', 'Cargo.lock', 'src/**') }}
       - name: Restore cached ESPHome binary
@@ -508,7 +507,7 @@ jobs:
         env:
           ESPHOME_API_VERSION: ${{ matrix.esphome.api }}
         run: |
-          . venv/bin/activate
+          . .venv/bin/activate
           pytest \
             -n auto \
             -qq \
@@ -551,7 +550,7 @@ jobs:
         id: cache-venv
         uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
         with:
-          path: venv
+          path: .venv
           key: >-
             1-${{ runner.os }}-base-venv-${{ steps.python.outputs.python-version }}-${{ hashFiles('pyproject.toml', 'uv.lock', 'setup.py', 'Cargo.toml', 'Cargo.lock', 'src/**') }}
       - name: Restore cached Rust extension
@@ -572,19 +571,18 @@ jobs:
       - name: Create Python virtual environment
         if: steps.cache-venv.outputs.cache-hit != 'true'
         env:
-          UV_PROJECT_ENVIRONMENT: venv
           UV_PYTHON: ${{ steps.python.outputs.python-path }}
         run: uv sync --locked
       - name: Rebuild Rust extension
         if: steps.cache-venv.outputs.cache-hit == 'true' && steps.cache-ext.outputs.cache-hit != 'true'
         run: |
-          . venv/bin/activate
+          . .venv/bin/activate
           python setup.py build_ext --inplace
       - name: Cache base Python virtual environment
         if: steps.cache-venv.outputs.cache-hit != 'true'
         uses: actions/cache/save@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
         with:
-          path: venv
+          path: .venv
           key: ${{ steps.cache-venv.outputs.cache-primary-key }}
       - name: Cache Rust extension
         if: steps.cache-ext.outputs.cache-hit != 'true'
@@ -594,7 +592,7 @@ jobs:
           key: ${{ steps.cache-ext.outputs.cache-primary-key }}
       - name: Run tests
         run: |
-          . venv/bin/activate
+          . .venv/bin/activate
           python -m serialx.tools.list_ports
           pytest --timeout=20 --cov=serialx tests
       - name: Upload coverage artifact
@@ -637,7 +635,7 @@ jobs:
         id: cache-venv
         uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
         with:
-          path: venv
+          path: .venv
           key: >-
             1-${{ runner.os }}-base-venv-${{ steps.python.outputs.python-version }}-${{ hashFiles('pyproject.toml', 'uv.lock', 'setup.py', 'Cargo.toml', 'Cargo.lock', 'src/**') }}
       - name: Restore cached Rust extension
@@ -658,19 +656,18 @@ jobs:
       - name: Create Python virtual environment
         if: steps.cache-venv.outputs.cache-hit != 'true'
         env:
-          UV_PROJECT_ENVIRONMENT: venv
           UV_PYTHON: ${{ steps.python.outputs.python-path }}
         run: uv sync --locked
       - name: Rebuild Rust extension
         if: steps.cache-venv.outputs.cache-hit == 'true' && steps.cache-ext.outputs.cache-hit != 'true'
         run: |
-          venv\Scripts\activate
+          .venv\Scripts\activate
           python setup.py build_ext --inplace
       - name: Cache base Python virtual environment
         if: steps.cache-venv.outputs.cache-hit != 'true'
         uses: actions/cache/save@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
         with:
-          path: venv
+          path: .venv
           key: ${{ steps.cache-venv.outputs.cache-primary-key }}
       - name: Cache Rust extension
         if: steps.cache-ext.outputs.cache-hit != 'true'
@@ -681,7 +678,7 @@ jobs:
       - name: Run tests
         shell: pwsh
         run: |
-          venv\Scripts\activate
+          .venv\Scripts\activate
           python -m serialx.tools.list_ports
           pytest --timeout=20 --cov=serialx tests `
             --adapter-pair CNCA0,CNCB0,no-buffer-control,no-rts-dtr-readback `
@@ -713,12 +710,12 @@ jobs:
         uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
         with:
           fail-on-cache-miss: true
-          path: venv
+          path: .venv
           key: >-
             1-${{ runner.os }}-base-venv-${{ steps.python.outputs.python-version }}-${{ hashFiles('pyproject.toml', 'uv.lock', 'setup.py', 'Cargo.toml', 'Cargo.lock', 'src/**') }}
       - name: Install serialx-compat and run tests
         run: |
-          . venv/bin/activate
+          . .venv/bin/activate
           uv pip install -e serialx_compat
           pytest -q serialx_compat/tests
 
@@ -772,14 +769,14 @@ jobs:
         uses: actions/cache/restore@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
         with:
           fail-on-cache-miss: true
-          path: venv
+          path: .venv
           key: >-
             1-${{ runner.os }}-base-venv-${{ steps.python.outputs.python-version }}-${{ hashFiles('pyproject.toml', 'uv.lock', 'setup.py', 'Cargo.toml', 'Cargo.lock', 'src/**') }}
       - name: Download all coverage artifacts
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
       - name: Combine coverage results
         run: |
-          . venv/bin/activate
+          . .venv/bin/activate
           coverage combine coverage*/.coverage*
           coverage report
           coverage xml
