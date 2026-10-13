@@ -1175,6 +1175,8 @@ class ESPHomeSerialTransport(BaseSerialTransport):
         self._closed_unsub: Callable[[], None] | None = None
         self._identity_unsub: Callable[[], None] | None = None
         self._close_task: asyncio.Task[None] | None = None
+        # Data the device sent before the protocol was told about the transport
+        self._pending_data: list[bytes] | None = []
 
     @translate_esphome_errors
     async def _connect(
@@ -1208,6 +1210,14 @@ class ESPHomeSerialTransport(BaseSerialTransport):
         await self._serial._async_configure_port()
 
         self._call_protocol_connection_made()
+
+        # The device streams from the subscribe onwards, while the protocol only learns
+        # of the transport once the port is configured. Replay what arrived in between,
+        # as asyncio's subprocess transport does, so the protocol never sees data first.
+        pending_data, self._pending_data = self._pending_data, None
+        assert pending_data is not None
+        for data in pending_data:
+            self._protocol.data_received(data)
 
     async def _register_transport_closed_handler(self) -> Callable[[], None]:
         """Register `_on_api_connection_closed` on the client's loop, return the unsub."""
@@ -1306,9 +1316,21 @@ class ESPHomeSerialTransport(BaseSerialTransport):
 
         client_loop = self._serial._client_loop
         if client_loop is None or client_loop is self._loop:
-            self._protocol.data_received(msg.data)
+            self._deliver_data(msg.data)
         else:
-            self._loop.call_soon_threadsafe(self._protocol.data_received, msg.data)
+            self._loop.call_soon_threadsafe(self._deliver_data, msg.data)
+
+    def _deliver_data(self, data: bytes) -> None:
+        if self._pending_data is not None:
+            LOGGER.debug(
+                "Data received before connection made, buffering (%d bytes, %d total packets)",
+                len(data),
+                len(self._pending_data),
+            )
+            self._pending_data.append(data)
+            return
+
+        self._protocol.data_received(data)
 
     def write(self, data: bytes | bytearray | memoryview) -> None:
         """Write data to the serial proxy."""

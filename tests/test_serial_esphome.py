@@ -23,6 +23,7 @@ import warnings
 from aioesphomeapi.model import (
     APIVersion,
     DeviceInfo,
+    SerialProxyDataReceived,
     SerialProxyIdentity,
     SerialProxyIdentityFlag,
     SerialProxyIdentitySource,
@@ -41,6 +42,7 @@ from serialx import (
     UnsupportedSetting,
     async_list_serial_ports,
     async_serial_for_url,
+    create_serial_connection,
     list_serial_ports,
     redact_uri,
 )
@@ -723,6 +725,47 @@ async def test_mode_protocol_set_before_subscribe() -> None:
             data_size=8,
         ),
     ]
+
+
+async def test_data_before_connection_made_is_held() -> None:
+    """Data streamed during the handshake reaches the protocol after `connection_made`."""
+    api = mock_api_client("Zigbee")
+    events: list[object] = []
+
+    class RecordingProtocol(asyncio.Protocol):
+        def connection_made(self, transport: asyncio.BaseTransport) -> None:
+            events.append("connection_made")
+
+        def data_received(self, data: bytes) -> None:
+            events.append(data)
+
+    async def subscribe(instance: int, *, timeout: float) -> None:
+        # The device starts streaming as soon as it is subscribed, before the mode and
+        # port settings are negotiated
+        on_data = api.subscribe_serial_proxy_data.call_args.args[0]
+        on_data(SerialProxyDataReceived(instance=instance, data=b"early"))  # type:ignore[call-arg]
+
+    api.serial_proxy_subscribe_await_response.side_effect = subscribe
+
+    transport, _ = await create_serial_connection(
+        asyncio.get_running_loop(),
+        RecordingProtocol,
+        url=None,
+        baudrate=115200,
+        transport_cls=ESPHomeSerialTransport,
+        api=api,
+        port_name="Zigbee",
+    )
+
+    assert events == ["connection_made", b"early"]
+
+    # Once connected, data is delivered directly
+    on_data = api.subscribe_serial_proxy_data.call_args.args[0]
+    on_data(SerialProxyDataReceived(instance=0, data=b"late"))  # type:ignore[call-arg]
+    assert events == ["connection_made", b"early", b"late"]
+
+    transport.close()
+    await transport.wait_closed()
 
 
 async def test_mode_protocol_kwarg_with_external_api() -> None:
