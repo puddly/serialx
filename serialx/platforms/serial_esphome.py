@@ -56,7 +56,6 @@ from aioesphomeapi.model import (
     SerialProxyParity,
     SerialProxyRequestResponse,
     SerialProxyStatus,
-    UsbSerialDriver,
 )
 from typing_extensions import Buffer, Unpack
 
@@ -84,6 +83,8 @@ LOGGER = logging.getLogger(__name__)
 
 # Set-mode arrived in API 1.17. Earlier devices never answer a set-mode request.
 MIN_VERSION_SERIAL_PROXY_SET_MODE = APIVersion(1, 17)
+
+USB_CLASS_VENDOR_SPEC = 0xFF
 
 # Identity arrived in API 1.18. Earlier devices never answer an identity request.
 MIN_VERSION_SERIAL_PROXY_IDENTITY = APIVersion(1, 18)
@@ -159,9 +160,11 @@ def identity_port_info(
         bcd_device=identity.usb.bcd_device if has_usb else None,
         interface_description=interface_description,
         interface_num=identity.usb.interface_number if has_usb else None,
+        # A vendor-specific interface is bound through a chip driver, which numbers its
+        # ports; a class interface (CDC ACM) is bound by the class driver itself
         port_number=(
             identity.usb.port_number
-            if has_usb and identity.usb.driver is UsbSerialDriver.VENDOR
+            if has_usb and identity.usb.interface_class == USB_CLASS_VENDOR_SPEC
             else None
         ),
     )

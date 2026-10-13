@@ -32,7 +32,6 @@ from aioesphomeapi.model import (
     SerialProxyRequestResponse,
     SerialProxyStatus,
     UsbDeviceDescriptor,
-    UsbSerialDriver,
 )
 
 from serialx import (
@@ -940,6 +939,7 @@ def _identity(**overrides: object) -> SerialProxyIdentity:
             product_id=0x4001,
             bcd_device=0x0101,
             interface_number=0,
+            interface_class=0x02,
         ),
     }
     fields.update(overrides)
@@ -947,47 +947,37 @@ def _identity(**overrides: object) -> SerialProxyIdentity:
 
 
 @pytest.mark.parametrize(
-    ("driver", "port_number", "udev_id"),
+    ("interface_class", "port_number", "udev_id"),
     [
+        pytest.param(0x02, 0, "usb-Nabu_Casa_ZBT-2_AABBCCDDEEFF-if00", id="cdc_acm"),
         pytest.param(
-            UsbSerialDriver.CLASS,
-            0,
-            "usb-Nabu_Casa_ZBT-2_AABBCCDDEEFF-if00",
-            id="class",
+            0xFF, 0, "usb-Nabu_Casa_ZBT-2_AABBCCDDEEFF-if00-port0", id="vendor"
         ),
         pytest.param(
-            UsbSerialDriver.VENDOR,
-            0,
-            "usb-Nabu_Casa_ZBT-2_AABBCCDDEEFF-if00-port0",
-            id="vendor",
-        ),
-        pytest.param(
-            UsbSerialDriver.VENDOR,
+            0xFF,
             2,
             "usb-Nabu_Casa_ZBT-2_AABBCCDDEEFF-if00-port2",
             id="vendor_multiplexed",
         ),
     ],
 )
-def test_identity_udev_id_follows_driver(
-    driver: UsbSerialDriver, port_number: int, udev_id: str
+def test_identity_udev_id_follows_interface_class(
+    interface_class: int, port_number: int, udev_id: str
 ) -> None:
-    """A vendor driver's port index ends up in the name, a class driver's does not."""
+    """A chip driver's port index ends up in the name, a class driver's does not."""
     identity = _identity(
         usb=UsbDeviceDescriptor(  # type:ignore[call-arg]
             vendor_id=0x303A,
             product_id=0x4001,
             bcd_device=0x0101,
             interface_number=0,
-            driver=driver,
+            interface_class=interface_class,
             port_number=port_number,
         )
     )
     port = identity_port_info(identity, interface_description="Zigbee")
 
-    assert port.port_number == (
-        port_number if driver is UsbSerialDriver.VENDOR else None
-    )
+    assert port.port_number == (port_number if interface_class == 0xFF else None)
     assert udev_serial_by_id_stem(port) == udev_id
 
 
