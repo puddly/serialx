@@ -3,6 +3,7 @@
 #include "serialx_host_overrides.h"
 
 #include "esphome/components/api/api_server.h"
+#include "esphome/core/alloc_helpers.h"
 #include "esphome/core/helpers.h"
 #include "esphome/core/log.h"
 
