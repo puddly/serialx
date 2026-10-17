@@ -20,6 +20,24 @@ from unittest.mock import ANY, AsyncMock, MagicMock, call, patch
 import urllib.parse
 import warnings
 
+from aioesphomeapi.core import (
+    APIConnectionError,
+    BadMACAddressAPIError,
+    BadNameAPIError,
+    ConnectionNotEstablishedAPIError,
+    HandshakeAPIError,
+    InvalidAuthAPIError,
+    InvalidEncryptionKeyAPIError,
+    PingFailedAPIError,
+    ProtocolAPIError,
+    ReadFailedAPIError,
+    RequiresEncryptionAPIError,
+    ResolveAPIError,
+    ResolveTimeoutAPIError,
+    SocketAPIError,
+    SocketClosedAPIError,
+    TimeoutAPIError,
+)
 from aioesphomeapi.model import (
     APIVersion,
     DeviceInfo,
@@ -44,6 +62,7 @@ from serialx import (
     async_serial_for_url,
     create_serial_connection,
     list_serial_ports,
+    open_serial_connection,
     redact_uri,
     udev_serial_by_id_stem,
 )
@@ -339,6 +358,87 @@ async def test_connect_timeout_raises_timeout_error() -> None:
                 url="esphome://192.0.2.1:6053?port_name=test", baudrate=115200
             ):
                 pass
+
+
+async def test_open_disconnected_api_raises_connection_error() -> None:
+    """An offline externally managed API is an I/O failure callers can retry."""
+    api = APIClient(address="127.0.0.1", port=ESPHOME_DEFAULT_PORT, password=None)
+
+    with pytest.raises(OSError, match="Not connected") as exc_info:
+        await open_serial_connection(
+            url=None,
+            transport_cls=ESPHomeSerialTransport,
+            api=api,
+            port_name="test",
+            baudrate=115200,
+        )
+
+    assert isinstance(exc_info.value, ConnectionError)
+    assert isinstance(exc_info.value.__cause__, APIConnectionError)
+    assert not api.is_connected
+
+
+@pytest.mark.parametrize(
+    ("error", "expected_type"),
+    [
+        (APIConnectionError("Not connected"), ConnectionError),
+        (ConnectionNotEstablishedAPIError("Not ready"), ConnectionError),
+        (SocketAPIError("Connection refused"), ConnectionError),
+        (SocketClosedAPIError("Connection closed"), ConnectionError),
+        (ResolveAPIError("Host unavailable"), ConnectionError),
+        (ReadFailedAPIError("Read failed"), ConnectionError),
+        (PingFailedAPIError("Ping failed"), ConnectionError),
+        (TimeoutAPIError("Connect timed out"), TimeoutError),
+        (ResolveTimeoutAPIError("Resolve timed out"), TimeoutError),
+        (InvalidAuthAPIError("Invalid password"), SerialException),
+        (InvalidEncryptionKeyAPIError("Invalid key"), SerialException),
+        (HandshakeAPIError("Invalid handshake"), SerialException),
+        (ProtocolAPIError("Invalid protocol"), SerialException),
+        (RequiresEncryptionAPIError("Encryption required"), SerialException),
+        (BadNameAPIError("Wrong device", "other-device"), SerialException),
+        (
+            BadMACAddressAPIError("Wrong device", "other-device", "00:11:22:33:44:55"),
+            SerialException,
+        ),
+    ],
+)
+async def test_open_api_error_classification(
+    error: APIConnectionError, expected_type: type[Exception]
+) -> None:
+    """Opening preserves the distinction between transport and protocol failures."""
+    with patch.object(APIClient, "connect", side_effect=error):
+        with pytest.raises(expected_type) as exc_info:
+            await open_serial_connection(
+                url="esphome://127.0.0.1:6053?port_name=test", baudrate=115200
+            )
+
+    assert type(exc_info.value) is expected_type
+    assert exc_info.value.__cause__ is error
+
+
+async def test_open_api_disconnect_during_setup() -> None:
+    """A connection lost before setup completes is still an I/O failure."""
+    api = mock_api_client("test")
+    api.is_connected = True
+    unsub = MagicMock()
+
+    def disconnect_during_setup(*args: object) -> MagicMock:
+        api.is_connected = False
+        return unsub
+
+    api.subscribe_serial_proxy_data.side_effect = disconnect_during_setup
+
+    with pytest.raises(ConnectionError, match="closed while connecting"):
+        await open_serial_connection(
+            url=None,
+            transport_cls=ESPHomeSerialTransport,
+            api=api,
+            port_name="test",
+            baudrate=115200,
+        )
+
+    unsub.assert_called_once_with()
+    api.disconnect.assert_not_called()
 
 
 @pytest.mark.skipif(not ESPHOME_HOST_BINARY, reason="esphome host binary not available")
