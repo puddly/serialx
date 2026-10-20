@@ -1196,7 +1196,7 @@ async def test_port_usb_matcher_accepts_configured_identity() -> None:
 async def test_list_serial_ports_reports_identity() -> None:
     """Each port lists what its identity says is attached, and nothing it cannot know."""
     api = mock_api_client(
-        "USB", "Configured", "Empty", "Unreadable", "None", "Mimic", "Partial"
+        "USB", "Configured", "Empty", "Unreadable", "None", "Mimic", "Partial", "Clone"
     )
     api.api_version = APIVersion(1, 18)
     identities = [
@@ -1219,6 +1219,7 @@ async def test_list_serial_ports_reports_identity() -> None:
             serial_number="",
             usb=UsbDeviceDescriptor(vendor_id=0x303A),  # type:ignore[call-arg]
         ),
+        _identity(instance=7, serial_number="0001"),
     ]
     api.attach_mock(
         AsyncMock(side_effect=lambda instance, timeout: identities[instance]),
@@ -1299,9 +1300,22 @@ async def test_list_serial_ports_reports_identity() -> None:
             interface_description="Partial",
             interface_num=None,
         ),
+        # A serial number shared by many devices is also tied to the port it is on
+        SerialPortInfo(
+            device=f"{base}Clone&port_udev_id=usb-Nabu_Casa_ZBT-2_0001-if00",
+            resolved_device=f"{base}Clone&port_udev_id=usb-Nabu_Casa_ZBT-2_0001-if00",
+            vid=0x303A,
+            pid=0x4001,
+            serial_number="0001",
+            manufacturer="Nabu Casa",
+            product="ZBT-2",
+            bcd_device=0x0101,
+            interface_description="Clone",
+            interface_num=0,
+        ),
     ]
     assert api.serial_proxy_get_identity.mock_calls == [
-        call(instance, timeout=10.0) for instance in range(7)
+        call(instance, timeout=10.0) for instance in range(8)
     ]
 
 
