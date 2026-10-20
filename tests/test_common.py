@@ -401,6 +401,37 @@ def test_serial_port_info_description(port: SerialPortInfo, expected: str) -> No
     assert port.description == expected
 
 
+@pytest.mark.parametrize(
+    ("serial_number", "expected"),
+    [
+        pytest.param("A6008isP", True, id="unique"),
+        pytest.param(None, False, id="missing"),
+        pytest.param("", False, id="empty"),
+        pytest.param("   ", False, id="whitespace"),
+        pytest.param("A50285BI", False, id="ftdi_clone"),
+        pytest.param("A50285BIA", False, id="ftdi_clone_windows"),
+        pytest.param("0001", False, id="cp210x_default"),
+    ],
+)
+def test_serial_port_info_is_unique(serial_number: str | None, expected: bool) -> None:
+    """Test the `is_unique` property on `SerialPortInfo`."""
+    port = SerialPortInfo(
+        device="/dev/ttyUSB0",
+        resolved_device="/dev/ttyUSB0",
+        vid=0x0403,
+        pid=0x6001,
+        serial_number=serial_number,
+        manufacturer="FTDI",
+        product="FT232R USB UART",
+        bcd_device=0x0600,
+        interface_description=None,
+        interface_num=0,
+        port_number=0,
+    )
+
+    assert port.is_unique is expected
+
+
 @pytest.mark.parametrize("platform", list(Platform))
 def test_list_serial_ports_all_platforms(platform: Platform) -> None:
     """Sync listing returns a list of `SerialPortInfo` for every platform."""

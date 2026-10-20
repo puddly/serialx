@@ -1530,6 +1530,47 @@ def get_serial_classes(
     return handler.sync_cls, handler.async_transport_cls
 
 
+# USB serial numbers known to be shared by many devices
+NON_UNIQUE_SERIAL_NUMBERS = frozenset(
+    {
+        # Counterfeit FT232R (0403:6001) chips have no writable EEPROM. Windows appends
+        # an `A` to FTDI serial numbers, so both spellings are seen.
+        "A50285BI",
+        "A50285BIA",
+        "A5XK3RJT",
+        "A5XK3RJTA",
+        "A5XK3RJJ",
+        "A5069RR4",
+        "FTB6SPL3",
+        "A601CKQK",
+        "A400DE3U",
+        "00000000",
+        "0000000",
+        # FT232RL reels sold at a discount, likely factory rejects
+        "DUT",
+        # Unprogrammed Silicon Labs CP210x default, kept by some vendors (early Sonoff
+        # ZBDongle-P batches, Zooz ZST10-700, SiK telemetry radios) and by CP2102 clones
+        "0001",
+        # CP2102 programmed identically by NTREX for every STELLA AHRS
+        "1234",
+        # STM32 CubeMX CDC VCP default descriptor
+        "00000000001A",
+        # ESP32-S2 ROM download mode
+        "0",
+        # Older esp_tinyusb default descriptor
+        "123456",
+        # Microchip MCP2221 with serial number enumeration enabled but unset
+        "0000000000",
+        # Raspberry Pi Pico SDK `PICO_NO_FLASH` builds, with no flash ID to read
+        "EEEEEEEEEEEEEEEE",
+        # Arduino ATmega32U4 PluggableUSB, built from the interface letters
+        "HIDFG",
+        # Android boards (HiKey960) with an unset serial, seen by adb
+        "0123456789ABCDEF",
+    }
+)
+
+
 @dataclasses.dataclass
 class SerialPortInfo:
     """A serial port."""
@@ -1575,6 +1616,14 @@ class SerialPortInfo:
             return self.product
 
         return os.path.basename(self.resolved_device)
+
+    @property
+    def is_unique(self) -> bool:
+        """Whether the serial number tells this device apart from identical ones."""
+        if self.serial_number is None or not self.serial_number.strip():
+            return False
+
+        return self.serial_number not in NON_UNIQUE_SERIAL_NUMBERS
 
 
 def list_serial_ports(
