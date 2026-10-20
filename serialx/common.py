@@ -1569,6 +1569,8 @@ NON_UNIQUE_SERIAL_NUMBERS = frozenset(
         "0123456789ABCDEF",
         # Z-Wave.Me UZB1 firmware
         "12345678-9012-3456-7890-123456789012",
+        # ZiGate+ (FT230X, 0403:6015), programmed with the product name
+        "ZIGATE+",
         # TI CC25xx USB stack (CC2531, CC2540), also seen on FT232R clones
         "001",
         # VESC on ChibiOS, which reports the kernel version as the serial number

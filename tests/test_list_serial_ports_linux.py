@@ -254,8 +254,9 @@ def test_replay_debian_13_kernel_7_0(
             interface_num=1,
             port_number=0,
         ),
+        # Every ZiGate+ has the same serial number
         SerialPortInfo(
-            device=str(by_id / "usb-FTDI_ZiGate_ZIGATE+-if00-port0"),
+            device=str(by_path / "pci-0000:00:14.0-usbv2-0:6.4:1.0-port0"),
             resolved_device=str(dev_root / "ttyUSB2"),
             vid=0x0403,
             pid=0x6015,
