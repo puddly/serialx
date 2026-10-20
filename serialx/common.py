@@ -1567,6 +1567,27 @@ NON_UNIQUE_SERIAL_NUMBERS = frozenset(
         "HIDFG",
         # Android boards (HiKey960) with an unset serial, seen by adb
         "0123456789ABCDEF",
+        # Z-Wave.Me UZB1 firmware
+        "12345678-9012-3456-7890-123456789012",
+        # TI CC25xx USB stack (CC2531, CC2540), also seen on FT232R clones
+        "001",
+        # VESC on ChibiOS, which reports the kernel version as the serial number
+        "301",
+        "304",
+        # Linux USB gadget scripts (Milk-V Duo, Librem 5, Zynq boards, Ubiquiti)
+        "0123456789",
+        # Some RP2040 firmwares (PicoMite, MicroPython builds)
+        "000000000000",
+        # Dangerous Prototypes PIC firmware (USB IR Toy, LCD Backpack)
+        "00000001",
+        # TivaWare CDC example, Solo motor controllers, an FT232R batch
+        "12345678",
+        # WQ9201S and WQ9101 Wi-Fi modules
+        "123456789",
+        # Generic placeholders seen across unrelated USB devices
+        "000000000001",
+        "1234567890",
+        "000000000000000000000000",
     }
 )
 
