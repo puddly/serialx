@@ -1600,6 +1600,14 @@ NON_UNIQUE_SERIAL_NUMBERS = frozenset(
 )
 
 
+def is_non_unique_serial(serial_number: str | None) -> bool:
+    """Whether a serial number fails to tell a device apart from identical ones."""
+    if serial_number is None or not serial_number.strip():
+        return True
+
+    return serial_number in NON_UNIQUE_SERIAL_NUMBERS
+
+
 @dataclasses.dataclass
 class SerialPortInfo:
     """A serial port."""
@@ -1645,14 +1653,6 @@ class SerialPortInfo:
             return self.product
 
         return os.path.basename(self.resolved_device)
-
-    @property
-    def is_unique(self) -> bool:
-        """Whether the serial number tells this device apart from identical ones."""
-        if self.serial_number is None or not self.serial_number.strip():
-            return False
-
-        return self.serial_number not in NON_UNIQUE_SERIAL_NUMBERS
 
 
 def list_serial_ports(

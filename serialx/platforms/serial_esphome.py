@@ -70,6 +70,7 @@ from serialx.common import (
     PortSettingsUpdate,
     SerialPortInfo,
     StopBits,
+    is_non_unique_serial,
     redact_uri,
     register_uri_handler,
 )
@@ -711,7 +712,7 @@ class ESPHomeSerial(BaseSerial):
             # A device with a unique serial number is found wherever it is plugged in,
             # one without is only told apart from an identical one by the port it is on.
             query = {}
-            if not info.is_unique:
+            if is_non_unique_serial(info.serial_number):
                 query["port_name"] = proxy.name
 
             udev_id = udev_serial_by_id_stem(info)
