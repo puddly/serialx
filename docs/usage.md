@@ -79,3 +79,15 @@ The async APIs expose the same method as a coroutine:
 await serial.reconfigure_port(baudrate=9600)
 await transport.reconfigure_port(baudrate=9600)
 ```
+
+## Listing ports
+`list_serial_ports` returns a `SerialPortInfo` per port. A USB serial number is
+only an identifier when the vendor programmed a distinct one: clones, unprogrammed
+chips, and some firmwares ship a shared default. `is_non_unique_serial` reports
+whether a serial number is missing, blank, or one of these known placeholders.
+
+```python
+for port in serialx.list_serial_ports():
+    if serialx.is_non_unique_serial(port.serial_number):
+        print(f"{port.device} must be identified by its path")
+```
