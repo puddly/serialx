@@ -14,6 +14,7 @@ import dataclasses
 from enum import Enum
 import functools
 import io
+import itertools
 import logging
 import os.path
 from pathlib import Path
@@ -1532,22 +1533,33 @@ def get_serial_classes(
 
 # USB serial numbers known to be shared by many devices
 NON_UNIQUE_SERIAL_NUMBERS = frozenset(
-    {
-        # Counterfeit FT232R (0403:6001) chips have no writable EEPROM. Windows appends
-        # an `A` to FTDI serial numbers, so both spellings are seen.
-        "A50285BI",
-        "A50285BIA",
-        "A5XK3RJT",
-        "A5XK3RJTA",
-        "A5XK3RJJ",
-        "A5069RR4",
-        "FTB6SPL3",
-        "A601CKQK",
-        "A400DE3U",
-        "00000000",
-        "0000000",
-        # FT232RL reels sold at a discount, likely factory rejects
-        "DUT",
+    # Windows appends an `A` to FTDI serial numbers so both spellings are seen
+    set(
+        itertools.chain.from_iterable(
+            (serial + "", serial + "A")
+            for serial in {
+                # Counterfeit FT232R (0403:6001) chips have no writable EEPROM
+                "A50285BI",
+                "A5XK3RJT",
+                "A5XK3RJJ",
+                "A5069RR4",
+                "FTB6SPL3",
+                "A601CKQK",
+                "A400DE3U",
+                "00000000",
+                "0000000",
+                # FT232RL reels sold at a discount, likely factory rejects
+                "DUT",
+                # TivaWare CDC example, Solo motor controllers, an FT232R batch
+                "12345678",
+                # ZiGate+ (FT230X, 0403:6015), programmed with the product name
+                "ZIGATE+",
+                # TI CC25xx USB stack (CC2531, CC2540), also seen on FT232R clones
+                "001",
+            }
+        )
+    )
+    | {
         # Unprogrammed Silicon Labs CP210x default, kept by some vendors (early Sonoff
         # ZBDongle-P batches, Zooz ZST10-700, SiK telemetry radios) and by CP2102 clones
         "0001",
@@ -1569,10 +1581,6 @@ NON_UNIQUE_SERIAL_NUMBERS = frozenset(
         "0123456789ABCDEF",
         # Z-Wave.Me UZB1 firmware
         "12345678-9012-3456-7890-123456789012",
-        # ZiGate+ (FT230X, 0403:6015), programmed with the product name
-        "ZIGATE+",
-        # TI CC25xx USB stack (CC2531, CC2540), also seen on FT232R clones
-        "001",
         # VESC on ChibiOS, which reports the kernel version as the serial number
         "301",
         "304",
@@ -1582,8 +1590,6 @@ NON_UNIQUE_SERIAL_NUMBERS = frozenset(
         "000000000000",
         # Dangerous Prototypes PIC firmware (USB IR Toy, LCD Backpack)
         "00000001",
-        # TivaWare CDC example, Solo motor controllers, an FT232R batch
-        "12345678",
         # WQ9201S and WQ9101 Wi-Fi modules
         "123456789",
         # Generic placeholders seen across unrelated USB devices
