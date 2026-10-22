@@ -4,7 +4,7 @@ import sys
 
 import pytest
 
-if sys.platform != "linux":
+if sys.platform not in ("linux", "darwin"):
     pytest.skip("Linux-only tests", allow_module_level=True)
 
 import asyncio
@@ -101,15 +101,23 @@ def test_set_non_posix_baudrate_zero_speed_raises() -> None:
     assert captured == []
 
 
+@pytest.mark.parametrize(
+    "err",
+    [
+        OSError(errno.EOPNOTSUPP, "Not supported"),
+        OSError(errno.ENOTTY, "Inappropriate ioctl for device"),
+        OSError(errno.EPERM, "Operation not permitted"),
+    ],
+)
 @patch("serialx.platforms.serial_linux.TIOCGSERIAL", TIOCGSERIAL)
 @patch("serialx.platforms.serial_linux.TIOCSSERIAL", TIOCSSERIAL)
-def test_tiocgserial_ioctl_not_supported() -> None:
+def test_tiocgserial_ioctl_not_supported(err: OSError) -> None:
     """Test that TIOCGSERIAL ioctl not supported is handled gracefully."""
     ioctl_orig = fcntl.ioctl
 
     def ioctl(fd: int, request: int, arg: Any = 0, mutate_flag: bool = True) -> Any:
         if request in (TIOCGSERIAL, TIOCSSERIAL):
-            raise OSError(errno.EOPNOTSUPP, "Not supported")
+            raise err
 
         return ioctl_orig(fd, request, arg, mutate_flag)
 
