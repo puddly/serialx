@@ -304,6 +304,8 @@ class LinuxSerial(ExtendedPosixSerial):
             except OSError as exc:
                 if exc.errno in (errno.ENOTTY, errno.EOPNOTSUPP):
                     LOGGER.debug("Device does not support setting low latency")
+                elif exc.errno == errno.EPERM:
+                    LOGGER.debug("User does not have permission to set low latency")
                 else:
                     raise
 
