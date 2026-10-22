@@ -4,7 +4,7 @@ import sys
 
 import pytest
 
-if sys.platform not in ("linux", "darwin"):
+if sys.platform != "linux":
     pytest.skip("Linux-only tests", allow_module_level=True)
 
 import asyncio
