@@ -39,8 +39,14 @@ import warnings
 from aioesphomeapi.client import MIN_VERSION_PROXY_ACK, APIClient
 from aioesphomeapi.core import (  # type: ignore[attr-defined]
     APIConnectionError,
+    ConnectionNotEstablishedAPIError,
+    PingFailedAPIError,
     PingRequest,
     PingResponse,
+    ReadFailedAPIError,
+    ResolveAPIError,
+    ResolveTimeoutAPIError,
+    SocketAPIError,
     TimeoutAPIError,
 )
 from aioesphomeapi.model import (
@@ -212,9 +218,22 @@ def translate_esphome_errors(
     async def wrapper(*args: _P.args, **kwargs: _P.kwargs) -> _T:
         try:
             return await func(*args, **kwargs)
-        except TimeoutAPIError as exc:
+        except (TimeoutAPIError, ResolveTimeoutAPIError) as exc:
             raise TimeoutError(str(exc)) from exc
+        except (
+            ConnectionNotEstablishedAPIError,
+            SocketAPIError,
+            ResolveAPIError,
+            ReadFailedAPIError,
+            PingFailedAPIError,
+        ) as exc:
+            raise ConnectionError(str(exc)) from exc
         except APIConnectionError as exc:
+            # The client raises the base class when it is not connected. Only
+            # transport failures should become I/O errors: authentication and
+            # protocol errors also inherit from APIConnectionError.
+            if type(exc) is APIConnectionError:
+                raise ConnectionError(str(exc)) from exc
             raise SerialException(str(exc)) from exc
 
     return cast(Callable[_P, Coroutine[Any, Any, _T]], wrapper)
@@ -1215,7 +1234,7 @@ class ESPHomeSerialTransport(BaseSerialTransport):
         # Nothing is replayed for a connection that closed while we were setting
         # up, so the state has to be re-checked once the callback is installed.
         if not self._serial._api.is_connected:
-            raise SerialException("ESPHome API connection closed while connecting")
+            raise ConnectionError("ESPHome API connection closed while connecting")
 
         await self._serial._async_configure_port()
 
