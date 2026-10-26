@@ -20,6 +20,25 @@ from unittest.mock import ANY, AsyncMock, MagicMock, call, patch
 import urllib.parse
 import warnings
 
+from aioesphomeapi.core import (
+    APIConnectionError,
+    BadMACAddressAPIError,
+    BadNameAPIError,
+    ConnectionNotEstablishedAPIError,
+    EncryptionHelloAPIError,
+    HandshakeAPIError,
+    InvalidAuthAPIError,
+    InvalidEncryptionKeyAPIError,
+    PingFailedAPIError,
+    ProtocolAPIError,
+    ReadFailedAPIError,
+    RequiresEncryptionAPIError,
+    ResolveAPIError,
+    ResolveTimeoutAPIError,
+    SocketAPIError,
+    SocketClosedAPIError,
+    TimeoutAPIError,
+)
 from aioesphomeapi.model import (
     APIVersion,
     DeviceInfo,
@@ -44,6 +63,7 @@ from serialx import (
     async_serial_for_url,
     create_serial_connection,
     list_serial_ports,
+    open_serial_connection,
     redact_uri,
     udev_serial_by_id_stem,
 )
@@ -339,6 +359,131 @@ async def test_connect_timeout_raises_timeout_error() -> None:
                 url="esphome://192.0.2.1:6053?port_name=test", baudrate=115200
             ):
                 pass
+
+
+@pytest.mark.parametrize("connection_exists", [False, True])
+async def test_open_disconnected_api_raises_connection_error(
+    connection_exists: bool,
+) -> None:
+    """An offline externally managed API is an I/O failure callers can retry."""
+    api = APIClient(address="127.0.0.1", port=ESPHOME_DEFAULT_PORT, password=None)
+    if connection_exists:
+        await api.start_resolve_host(log_errors=False)
+
+    with pytest.raises(
+        ConnectionError, match="Not connected|Authenticated connection not ready"
+    ) as exc_info:
+        await open_serial_connection(
+            url=None,
+            transport_cls=ESPHomeSerialTransport,
+            api=api,
+            port_name="test",
+            baudrate=115200,
+        )
+
+    assert isinstance(exc_info.value.__cause__, ConnectionNotEstablishedAPIError)
+    assert not api.is_connected
+
+
+@pytest.mark.parametrize(
+    ("error", "expected_type"),
+    [
+        (APIConnectionError("Connection closed"), ConnectionError),
+        (ConnectionNotEstablishedAPIError("Not ready"), ConnectionError),
+        (SocketAPIError("Connection refused"), ConnectionError),
+        (SocketClosedAPIError("Connection closed"), ConnectionError),
+        (ResolveAPIError("Host unavailable"), ConnectionError),
+        (ReadFailedAPIError("Read failed"), ConnectionError),
+        (PingFailedAPIError("Ping failed"), ConnectionError),
+        (TimeoutAPIError("Connect timed out"), TimeoutError),
+        (ResolveTimeoutAPIError("Resolve timed out"), TimeoutError),
+        (InvalidAuthAPIError("Invalid password"), SerialException),
+        (InvalidEncryptionKeyAPIError("Invalid key"), SerialException),
+        (HandshakeAPIError("Invalid handshake"), SerialException),
+        (ProtocolAPIError("Invalid protocol"), SerialException),
+        (RequiresEncryptionAPIError("Encryption required"), SerialException),
+        (BadNameAPIError("Wrong device", "other-device"), SerialException),
+        (
+            BadMACAddressAPIError("Wrong device", "other-device", "00:11:22:33:44:55"),
+            SerialException,
+        ),
+    ],
+)
+async def test_open_api_error_classification(
+    error: APIConnectionError, expected_type: type[Exception]
+) -> None:
+    """Opening preserves the distinction between transport and protocol failures."""
+    with patch.object(APIClient, "connect", side_effect=error):
+        with pytest.raises(expected_type) as exc_info:
+            await open_serial_connection(
+                url="esphome://127.0.0.1:6053?port_name=test", baudrate=115200
+            )
+
+    assert type(exc_info.value) is expected_type
+    assert exc_info.value.__cause__ is error
+
+
+@pytest.mark.parametrize(
+    ("error", "cause", "expected_type"),
+    [
+        (
+            HandshakeAPIError("Handshake failed"),
+            ConnectionResetError(),
+            ConnectionError,
+        ),
+        (HandshakeAPIError("Handshake failed"), ValueError(), SerialException),
+        # aioesphomeapi reports this as a likely encryption mismatch
+        (
+            EncryptionHelloAPIError("Dropped after hello"),
+            ConnectionResetError(),
+            SerialException,
+        ),
+        (
+            InvalidEncryptionKeyAPIError("Invalid key"),
+            ConnectionResetError(),
+            SerialException,
+        ),
+    ],
+)
+async def test_open_handshake_error_classification(
+    error: HandshakeAPIError, cause: Exception, expected_type: type[Exception]
+) -> None:
+    """Only a socket error wrapped in the bare `HandshakeAPIError` is retryable."""
+    error.__cause__ = cause
+
+    with patch.object(APIClient, "connect", side_effect=error):
+        with pytest.raises(expected_type) as exc_info:
+            await open_serial_connection(
+                url="esphome://127.0.0.1:6053?port_name=test", baudrate=115200
+            )
+
+    assert type(exc_info.value) is expected_type
+    assert exc_info.value.__cause__ is error
+
+
+async def test_open_api_disconnect_during_setup() -> None:
+    """A connection lost before setup completes is still an I/O failure."""
+    api = mock_api_client("test")
+    api.is_connected = True
+    unsub = MagicMock()
+
+    def disconnect_during_setup(*args: object) -> MagicMock:
+        api.is_connected = False
+        return unsub
+
+    api.subscribe_serial_proxy_data.side_effect = disconnect_during_setup
+
+    with pytest.raises(ConnectionError, match="closed while connecting"):
+        await open_serial_connection(
+            url=None,
+            transport_cls=ESPHomeSerialTransport,
+            api=api,
+            port_name="test",
+            baudrate=115200,
+        )
+
+    unsub.assert_called_once_with()
+    api.disconnect.assert_not_called()
 
 
 @pytest.mark.skipif(not ESPHOME_HOST_BINARY, reason="esphome host binary not available")
@@ -765,6 +910,31 @@ async def test_data_before_connection_made_is_held() -> None:
     on_data = api.subscribe_serial_proxy_data.call_args.args[0]
     on_data(SerialProxyDataReceived(instance=0, data=b"late"))  # type:ignore[call-arg]
     assert events == ["connection_made", b"early", b"late"]
+
+    transport.close()
+    await transport.wait_closed()
+
+
+async def test_flush_clean_disconnect_raises_connection_error() -> None:
+    """A device-initiated disconnect (e.g. reboot) fails a pending flush retryably."""
+    api = mock_api_client("Zigbee")
+    error = APIConnectionError("Connection closed")
+    api.attach_mock(AsyncMock(side_effect=error), "serial_proxy_flush")
+
+    transport, _ = await create_serial_connection(
+        asyncio.get_running_loop(),
+        asyncio.Protocol,
+        url=None,
+        baudrate=115200,
+        transport_cls=ESPHomeSerialTransport,
+        api=api,
+        port_name="Zigbee",
+    )
+
+    with pytest.raises(ConnectionError, match="Connection closed") as exc_info:
+        await transport.flush()
+
+    assert exc_info.value.__cause__ is error
 
     transport.close()
     await transport.wait_closed()
