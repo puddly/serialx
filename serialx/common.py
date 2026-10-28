@@ -329,6 +329,7 @@ class AllConnectKwargs(_CommonConnectKwargs, total=False):
     port_usb_pid: int | None
     port_usb_bcd_device: int | None
     port_usb_interface_num: int | None
+    port_usb_interface_description: str | None
     mode: str
     key: str | None
     password: str | None
@@ -355,6 +356,7 @@ BACKEND_CONNECT_KWARGS: dict[str, frozenset[str]] = {
             "port_usb_pid",
             "port_usb_bcd_device",
             "port_usb_interface_num",
+            "port_usb_interface_description",
             "mode",
             "key",
             "password",

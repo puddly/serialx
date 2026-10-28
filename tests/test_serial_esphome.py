@@ -540,7 +540,7 @@ def _expected_esphome_ports(netloc: str) -> list[SerialPortInfo]:
             manufacturer=None,
             product=None,
             bcd_device=None,
-            interface_description="Serial Proxy Left",
+            interface_description=None,
             interface_num=None,
         ),
         SerialPortInfo(
@@ -552,7 +552,7 @@ def _expected_esphome_ports(netloc: str) -> list[SerialPortInfo]:
             manufacturer=None,
             product=None,
             bcd_device=None,
-            interface_description="Serial Proxy Right",
+            interface_description=None,
             interface_num=None,
         ),
     ]
@@ -1110,6 +1110,7 @@ def _identity(**overrides: object) -> SerialProxyIdentity:
             bcd_device=0x0101,
             interface_number=0,
             interface_class=0x02,
+            interface_description="Nabu Casa ZBT-2",
         ),
     }
     fields.update(overrides)
@@ -1145,7 +1146,7 @@ def test_identity_udev_id_follows_interface_class(
             port_number=port_number,
         )
     )
-    port = identity_port_info(identity, interface_description="Zigbee")
+    port = identity_port_info(identity)
 
     assert port.port_number == (port_number if interface_class == 0xFF else None)
     assert udev_serial_by_id_stem(port) == udev_id
@@ -1280,6 +1281,7 @@ async def test_all_port_matchers_allow_connection() -> None:
             "port_usb_pid": "0x4001",
             "port_usb_bcd_device": "0x0101",
             "port_usb_interface_num": "0",
+            "port_usb_interface_description": "Nabu Casa ZBT-2",
             "port_udev_id": "usb-Nabu_Casa_ZBT-2_AABBCCDDEEFF-if00",
         }
     )
@@ -1303,6 +1305,7 @@ async def test_all_port_matchers_allow_connection() -> None:
         ("port_usb_pid", 0xEA60),
         ("port_usb_bcd_device", 0x0100),
         ("port_usb_interface_num", 1),
+        ("port_usb_interface_description", "Thread"),
         ("port_udev_id", "usb-Nabu_Casa_ZBT-2_AABBCCDDEEFF-if00-port0"),
     ],
 )
@@ -1422,7 +1425,7 @@ async def test_list_serial_ports_reports_identity() -> None:
             manufacturer="Nabu Casa",
             product="ZBT-2",
             bcd_device=0x0101,
-            interface_description="USB",
+            interface_description="Nabu Casa ZBT-2",
             interface_num=0,
         ),
         SerialPortInfo(
@@ -1434,14 +1437,14 @@ async def test_list_serial_ports_reports_identity() -> None:
             manufacturer="Nabu Casa",
             product="ZBT-2",
             bcd_device=None,
-            interface_description="Configured",
+            interface_description=None,
             interface_num=None,
         ),
         *(
             SerialPortInfo(
                 device=f"{base}{name}",
                 resolved_device=f"{base}{name}",
-                interface_description=name,
+                interface_description=None,
                 **empty,
             )
             for name in ("Empty", "Unreadable", "None")
@@ -1455,7 +1458,7 @@ async def test_list_serial_ports_reports_identity() -> None:
             manufacturer="Nabu Casa",
             product="ZBT-2",
             bcd_device=0x0101,
-            interface_description="Mimic",
+            interface_description="Nabu Casa ZBT-2",
             interface_num=0,
         ),
         SerialPortInfo(
@@ -1467,7 +1470,7 @@ async def test_list_serial_ports_reports_identity() -> None:
             manufacturer="Nabu Casa",
             product="ZBT-2",
             bcd_device=None,
-            interface_description="Partial",
+            interface_description=None,
             interface_num=None,
         ),
         # A serial number shared by many devices is also tied to the port it is on
@@ -1480,7 +1483,7 @@ async def test_list_serial_ports_reports_identity() -> None:
             manufacturer="Nabu Casa",
             product="ZBT-2",
             bcd_device=0x0101,
-            interface_description="Clone",
+            interface_description="Nabu Casa ZBT-2",
             interface_num=0,
         ),
     ]
@@ -1646,7 +1649,7 @@ async def test_list_serial_ports_skips_identity_on_old_api() -> None:
             manufacturer=None,
             product=None,
             bcd_device=None,
-            interface_description="Zigbee",
+            interface_description=None,
             interface_num=None,
         )
     ]
