@@ -180,7 +180,7 @@ jobs:
           - {ref: "2026.8.2", api: "1.15"}
           - {ref: "2026.9.0", api: "1.16"}
           - {ref: "2026.10.0", api: "1.19"}
-          - {ref: "29875a9e03051dab71fdf326681fa8656e410781", api: "1.23"}
+          - {ref: "29875a9e03051dab71fdf326681fa8656e410781", api: "1.20"}
     steps:
       - name: Check out code from GitHub
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -412,7 +412,7 @@ jobs:
           - {ref: "2026.8.2", api: "1.15"}
           - {ref: "2026.9.0", api: "1.16"}
           - {ref: "2026.10.0", api: "1.19"}
-          - {ref: "29875a9e03051dab71fdf326681fa8656e410781", api: "1.23"}
+          - {ref: "29875a9e03051dab71fdf326681fa8656e410781", api: "1.20"}
     name: Run ESPHome tests (${{ matrix.esphome.ref }}, API ${{ matrix.esphome.api }})
     steps:
       - name: Check out code from GitHub
