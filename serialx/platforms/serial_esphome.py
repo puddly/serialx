@@ -150,9 +150,7 @@ MODE_MAP = {
 }
 
 
-def identity_port_info(
-    identity: SerialProxyIdentity, interface_description: str
-) -> SerialPortInfo:
+def identity_port_info(identity: SerialProxyIdentity) -> SerialPortInfo:
     """Describe the device behind a port from its identity, with no URL yet."""
     # Any source can carry USB metadata, but a zero ID means it carries none
     has_usb = bool(identity.usb.vendor_id and identity.usb.product_id)
@@ -166,7 +164,7 @@ def identity_port_info(
         manufacturer=identity.manufacturer or None,
         product=identity.product or None,
         bcd_device=identity.usb.bcd_device if has_usb else None,
-        interface_description=interface_description,
+        interface_description=identity.usb.interface_description or None,
         interface_num=identity.usb.interface_number if has_usb else None,
         # A vendor-specific interface is bound through a chip driver, which numbers its
         # ports; a class interface (CDC ACM) is bound by the class driver itself
@@ -187,8 +185,9 @@ PORT_MATCHERS: dict[str, Callable[[SerialProxyIdentity], str | int | None]] = {
     "port_usb_pid": attrgetter("usb.product_id"),
     "port_usb_bcd_device": attrgetter("usb.bcd_device"),
     "port_usb_interface_num": attrgetter("usb.interface_number"),
+    "port_usb_interface_description": attrgetter("usb.interface_description"),
     "port_udev_id": lambda identity: udev_serial_by_id_stem(
-        identity_port_info(identity, interface_description="")
+        identity_port_info(identity)
     ),
 }
 
@@ -196,6 +195,11 @@ PORT_MATCHERS: dict[str, Callable[[SerialProxyIdentity], str | int | None]] = {
 # require both IDs to be set
 USB_PORT_MATCHERS = frozenset(
     name for name in PORT_MATCHERS if name.startswith("port_usb_")
+)
+
+# Read from a URL as Python integer literals; every other matcher is a string
+INT_PORT_MATCHERS = frozenset(
+    {"port_usb_vid", "port_usb_pid", "port_usb_bcd_device", "port_usb_interface_num"}
 )
 
 
@@ -292,6 +296,7 @@ class ESPHomeSerial(BaseSerial):
         port_usb_pid: int | None = None,
         port_usb_bcd_device: int | None = None,
         port_usb_interface_num: int | None = None,
+        port_usb_interface_description: str | None = None,
         port_udev_id: str | None = None,
         key: str | None = None,
         password: str | None = None,
@@ -326,6 +331,9 @@ class ESPHomeSerial(BaseSerial):
             port_usb_bcd_device: USB device release number the device behind the port
                 must report.
             port_usb_interface_num: USB interface number the port must be bound to.
+            port_usb_interface_description: USB interface string (iInterface) of the
+                interface the port is bound to, as the device reports it. A device
+                without one reports an empty string.
             port_udev_id: The `/dev/serial/by-id/` link name udev would give the
                 device behind the port, without the directory or any `-portN` suffix.
                 See `udev_serial_by_id_stem`.
@@ -378,6 +386,7 @@ class ESPHomeSerial(BaseSerial):
                 "port_usb_pid": port_usb_pid,
                 "port_usb_bcd_device": port_usb_bcd_device,
                 "port_usb_interface_num": port_usb_interface_num,
+                "port_usb_interface_description": port_usb_interface_description,
                 "port_udev_id": port_udev_id,
             }.items()
             if value is not None
@@ -608,7 +617,7 @@ class ESPHomeSerial(BaseSerial):
 
                 value = params[name][0]
                 self._port_matchers[name] = (
-                    int(value, 0) if name in USB_PORT_MATCHERS else value
+                    int(value, 0) if name in INT_PORT_MATCHERS else value
                 )
 
         # Only connect if the API was not passed in externally
@@ -710,7 +719,7 @@ class ESPHomeSerial(BaseSerial):
                 manufacturer=None,
                 product=None,
                 bcd_device=None,
-                interface_description=proxy.name,
+                interface_description=None,
                 interface_num=None,
             )
 
@@ -729,9 +738,7 @@ class ESPHomeSerial(BaseSerial):
                 )
 
                 if usable:
-                    info = identity_port_info(
-                        identity, interface_description=proxy.name
-                    )
+                    info = identity_port_info(identity)
 
             # Opening a listed port only succeeds with the same device still attached.
             # A device with a unique serial number is found wherever it is plugged in,
