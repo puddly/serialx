@@ -18,7 +18,8 @@ import threading
 from typing import Any
 from unittest.mock import ANY, call, patch
 
-from serialx.common import PortSettingsUpdate
+from serialx.common import PortSettingsUpdate, StopBits
+from serialx.platforms import serial_posix
 from serialx.platforms.serial_linux import (
     TERMIOS2_ABI,
     LinuxSerial,
@@ -99,6 +100,90 @@ def test_set_non_posix_baudrate_zero_speed_raises() -> None:
                     serial._set_non_posix_baudrate(250000)
 
     assert captured == []
+
+
+def _read_termios2(fileno: int) -> Any:
+    buffer = bytearray(ctypes.sizeof(TERMIOS2_ABI.struct))
+    fcntl.ioctl(fileno, TERMIOS2_ABI.tcgets2, buffer)
+    return TERMIOS2_ABI.struct.from_buffer(buffer)
+
+
+def test_non_posix_baudrate_reconfigure_is_one_tcsets2() -> None:
+    """Settings at a non-POSIX baudrate never pass through the placeholder baudrate."""
+    ioctl_orig = fcntl.ioctl
+    requests: list[int] = []
+
+    def ioctl(fd: int, request: int, arg: Any = 0, mutate_flag: bool = True) -> Any:
+        requests.append(request)
+        return ioctl_orig(fd, request, arg, mutate_flag)
+
+    with create_socat_pair() as (left, _right, _, _):
+        with LinuxSerial(left, baudrate=10400) as serial:
+            assert serial._fileno is not None
+
+            with (
+                patch("serialx.platforms.serial_linux.fcntl.ioctl", side_effect=ioctl),
+                patch("serialx.platforms.serial_posix.tcsetattr") as mock_tcsetattr,
+            ):
+                serial.reconfigure_port(stopbits=StopBits.TWO)
+
+            mock_tcsetattr.assert_not_called()
+            assert requests.count(TERMIOS2_ABI.tcsets2) == 1
+
+            termios2 = _read_termios2(serial._fileno)
+            flags = serial._build_tcsetattr_flags()
+            assert (termios2.c_ispeed, termios2.c_ospeed) == (10400, 10400)
+            assert termios2.c_cflag & TERMIOS2_ABI.cbaud == TERMIOS2_ABI.bother
+            assert termios2.c_cflag & termios.CSTOPB
+            assert termios2.c_cc[termios.VMIN] == flags.cc_vmin
+            assert termios2.c_cc[termios.VTIME] == flags.cc_vtime
+
+
+def test_non_posix_baudrate_falls_back_without_current_speed() -> None:
+    """A port that reports no speed yet (e.g. left at `B0`) still opens."""
+    ioctl_orig = fcntl.ioctl
+    zeros = bytes(ctypes.sizeof(TERMIOS2_ABI.struct))
+    readbacks: list[int] = []
+
+    def ioctl(fd: int, request: int, arg: Any = 0, mutate_flag: bool = True) -> Any:
+        if request == TERMIOS2_ABI.tcgets2 and not readbacks:
+            readbacks.append(request)
+            arg[: len(zeros)] = zeros
+            return 0
+        return ioctl_orig(fd, request, arg, mutate_flag)
+
+    with create_socat_pair() as (left, _right, _, _):
+        with (
+            patch("serialx.platforms.serial_linux.fcntl.ioctl", side_effect=ioctl),
+            patch(
+                "serialx.platforms.serial_posix.tcsetattr",
+                wraps=serial_posix.tcsetattr,
+            ) as mock_tcsetattr,
+            LinuxSerial(left, baudrate=10400) as serial,
+        ):
+            assert serial._fileno is not None
+            termios2 = _read_termios2(serial._fileno)
+
+    mock_tcsetattr.assert_called_once()
+    assert (termios2.c_ispeed, termios2.c_ospeed) == (10400, 10400)
+
+
+def test_posix_baudrate_reconfigure_uses_tcsetattr() -> None:
+    """Standard baudrates keep using `tcsetattr`."""
+    with create_socat_pair() as (left, _right, _, _):
+        with LinuxSerial(left, baudrate=115200) as serial:
+            assert serial._fileno is not None
+
+            with patch(
+                "serialx.platforms.serial_posix.tcsetattr",
+                wraps=serial_posix.tcsetattr,
+            ) as mock_tcsetattr:
+                serial.reconfigure_port(stopbits=StopBits.TWO)
+
+            mock_tcsetattr.assert_called_once()
+            termios2 = _read_termios2(serial._fileno)
+            assert (termios2.c_ispeed, termios2.c_ospeed) == (115200, 115200)
+            assert termios2.c_cflag & termios.CSTOPB
 
 
 @pytest.mark.parametrize(

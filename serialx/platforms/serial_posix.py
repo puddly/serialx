@@ -276,6 +276,12 @@ class PosixSerial(BaseSerial):
             cc_vtime=vtime,
         )
 
+    def _apply_attributes(self, attributes: list[Any]) -> None:
+        """Apply a `tcsetattr` attribute list to the port."""
+        assert self._fileno is not None
+        # TODO: should we use TCSADRAIN or TCSAFLUSH instead?
+        tcsetattr(self._fileno, termios.TCSANOW, attributes)
+
     def _after_configure_port(self) -> None:
         pass
 
@@ -306,9 +312,7 @@ class PosixSerial(BaseSerial):
         LOGGER.debug("Configuring serial port: %r + cc=%r", tcsetattr_flags, cc)
 
         # Finally, set up the serial port
-        tcsetattr(
-            self._fileno,
-            termios.TCSANOW,  # TODO: should we use TCSADRAIN or TCSAFLUSH instead?
+        self._apply_attributes(
             [
                 tcsetattr_flags.iflag,
                 tcsetattr_flags.oflag,
@@ -317,7 +321,7 @@ class PosixSerial(BaseSerial):
                 tcsetattr_flags.ispeed,
                 tcsetattr_flags.ospeed,
                 cc,
-            ],
+            ]
         )
 
         self._after_configure_port()

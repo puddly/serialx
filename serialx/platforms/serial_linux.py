@@ -239,8 +239,14 @@ class LinuxSerial(ExtendedPosixSerial):
         super().__init__(*args, **kwargs)
         self._low_latency = low_latency
 
-    def _set_non_posix_baudrate(self, baudrate: int) -> None:
-        """Set the baudrate of the serial port, must be called after `tcsetattr`."""
+    def _set_non_posix_baudrate(
+        self, baudrate: int, attributes: list[Any] | None = None
+    ) -> None:
+        """Set a non-POSIX baudrate with `TCSETS2`.
+
+        With `attributes` (a `tcsetattr` list), all settings are written in the same
+        call, so the port never runs at the `tcsetattr` placeholder baudrate.
+        """
         assert self._fileno is not None
 
         abi = TERMIOS2_ABI
@@ -249,6 +255,18 @@ class LinuxSerial(ExtendedPosixSerial):
         abi.validate(buffer)
 
         termios2 = abi.struct.from_buffer(buffer)
+
+        if attributes is not None:
+            iflag, oflag, cflag, lflag, _ispeed, _ospeed, cc = attributes
+            termios2.c_iflag = iflag
+            termios2.c_oflag = oflag
+            termios2.c_cflag = cflag
+            termios2.c_lflag = lflag
+
+            # Linux libc and kernel share the `c_cc` indices
+            for index in range(min(len(termios2.c_cc), len(cc))):
+                value = cc[index]
+                termios2.c_cc[index] = value[0] if isinstance(value, bytes) else value
 
         # The POSIX baudrates are stored in the lower bits of `c_cflag`. We clear them.
         termios2.c_cflag &= ~abi.cbaud
@@ -293,11 +311,21 @@ class LinuxSerial(ExtendedPosixSerial):
             else getattr(termios, f"B{self._baudrate}")
         )
 
-    def _after_configure_port(self) -> None:
-        if self._has_non_posix_baudrate:
-            LOGGER.debug("Setting non-POSIX baudrate %d", self._baudrate)
+    def _apply_attributes(self, attributes: list[Any]) -> None:
+        if not self._has_non_posix_baudrate:
+            super()._apply_attributes(attributes)
+            return
+
+        # One `TCSETS2`, so the line never runs at the placeholder baudrate
+        LOGGER.debug("Setting non-POSIX baudrate %d", self._baudrate)
+        try:
+            self._set_non_posix_baudrate(self._baudrate, attributes)
+        except RuntimeError:
+            # The current state has no speed yet (e.g. `B0`): set the placeholder first
+            super()._apply_attributes(attributes)
             self._set_non_posix_baudrate(self._baudrate)
 
+    def _after_configure_port(self) -> None:
         if TIOCSSERIAL is not None:
             try:
                 self._set_low_latency(self._low_latency)
