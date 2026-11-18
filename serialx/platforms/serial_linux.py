@@ -19,6 +19,7 @@ from typing import Any
 
 from ..common import Parity, SerialPortInfo, UnsupportedSetting, register_uri_handler
 from .serial_extended_posix import ExtendedPosixSerial, ExtendedPosixSerialTransport
+from .serial_posix import TermiosSettings
 
 LOGGER = logging.getLogger(__name__)
 
@@ -34,11 +35,6 @@ TCGETS = 0x5401
 
 TIOCGSERIAL = getattr(termios, "TIOCGSERIAL", None)
 TIOCSSERIAL = getattr(termios, "TIOCSSERIAL", None)
-
-# When we need to set a non-POSIX baudrate, we set the baudrates to a known default and
-# then override
-NON_POSIX_FALLBACK_BAUDRATE = 115200
-NON_POSIX_FALLBACK_BAUDRATE_CONST = termios.B115200
 
 
 class Termios2Struct(ctypes.Structure):
@@ -142,23 +138,6 @@ class Termios2Abi:
             ctypes.sizeof(self.struct),
         )
 
-    def validate(self, buffer: bytearray) -> None:
-        """Ensure a `TCGETS2` readback matches the struct layout we expect."""
-        termios2 = self.struct.from_buffer(buffer)
-        if termios2.c_ispeed == 0 or termios2.c_ospeed == 0:
-            raise RuntimeError(f"termios2 speed fields are zero: {buffer.hex()}")
-
-
-@dataclasses.dataclass(frozen=True)
-class PowerPcTermios2Abi(Termios2Abi):
-    """PowerPC has no `termios2`: its `struct termios` already has the speed fields."""
-
-    def validate(self, buffer: bytearray) -> None:
-        """Ensure a `TCGETS` readback is not all zeroes."""
-        # The speed fields can read back as zero until `BOTHER` is written
-        if not any(buffer):
-            raise RuntimeError(f"termios2 speed fields are zero: {buffer.hex()}")
-
 
 # Keyed by `uname -m` prefix
 TERMIOS2_ABIS: dict[str, Termios2Abi] = {
@@ -186,10 +165,10 @@ TERMIOS2_ABIS: dict[str, Termios2Abi] = {
         cbaud=0x0000100F,
         bother=0x00001000,
     ),
-    "ppc": PowerPcTermios2Abi(
+    "ppc": Termios2Abi(
         ioctl=IoctlEncoding(size_bits=13, read=2, write=4),
         struct=AlphaTermios2Struct,
-        # `TCGETS` and `TCSETS`
+        # PowerPC has no `termios2`: `TCGETS` and `TCSETS` already have the speed fields
         get_request=("t", 19),
         set_request=("t", 20),
         cbaud=0x000000FF,
@@ -239,45 +218,37 @@ class LinuxSerial(ExtendedPosixSerial):
         super().__init__(*args, **kwargs)
         self._low_latency = low_latency
 
-    def _set_non_posix_baudrate(
-        self, baudrate: int, attributes: list[Any] | None = None
-    ) -> None:
-        """Set a non-POSIX baudrate with `TCSETS2`.
-
-        With `attributes` (a `tcsetattr` list), all settings are written in the same
-        call, so the port never runs at the `tcsetattr` placeholder baudrate.
-        """
+    def _tcsets2(self, settings: TermiosSettings) -> None:
+        """Apply settings with a single `TCSETS2`, which takes any baudrate."""
         assert self._fileno is not None
 
         abi = TERMIOS2_ABI
         buffer = bytearray(ctypes.sizeof(abi.struct))
-        fcntl.ioctl(self._fileno, abi.tcgets2, buffer)
-        abi.validate(buffer)
 
+        # We only keep `c_line` and the rest of `c_cc` from the current state
+        fcntl.ioctl(self._fileno, abi.tcgets2, buffer)
         termios2 = abi.struct.from_buffer(buffer)
 
-        if attributes is not None:
-            iflag, oflag, cflag, lflag, _ispeed, _ospeed, cc = attributes
-            termios2.c_iflag = iflag
-            termios2.c_oflag = oflag
-            termios2.c_cflag = cflag
-            termios2.c_lflag = lflag
+        termios2.c_iflag = settings.iflag
+        termios2.c_oflag = settings.oflag
+        termios2.c_lflag = settings.lflag
+        termios2.c_cc[termios.VMIN] = settings.vmin
+        termios2.c_cc[termios.VTIME] = settings.vtime
 
-            # Linux libc and kernel share the `c_cc` indices
-            for index in range(min(len(termios2.c_cc), len(cc))):
-                value = cc[index]
-                termios2.c_cc[index] = value[0] if isinstance(value, bytes) else value
-
-        # The POSIX baudrates are stored in the lower bits of `c_cflag`. We clear them.
-        termios2.c_cflag &= ~abi.cbaud
-        termios2.c_cflag |= abi.bother
-
-        termios2.c_ispeed = baudrate
-        termios2.c_ospeed = baudrate
+        # `BOTHER` takes the place of the POSIX baudrate in the lower bits of `c_cflag`
+        termios2.c_cflag = settings.cflag | abi.bother
+        termios2.c_ispeed = settings.baudrate
+        termios2.c_ospeed = settings.baudrate
 
         # The ctypes structure mutates the buffer in place
         LOGGER.debug("Writing termios2 struct: %r", buffer.hex())
         fcntl.ioctl(self._fileno, abi.tcsets2, buffer)
+
+    def _write_termios_settings(self, settings: TermiosSettings) -> None:
+        if hasattr(termios, f"B{settings.baudrate}"):
+            super()._write_termios_settings(settings)
+        else:
+            self._tcsets2(settings)
 
     def _build_parity_flags(self) -> int:
         if self._parity == Parity.NONE:
@@ -292,38 +263,6 @@ class LinuxSerial(ExtendedPosixSerial):
             return termios.PARENB | CMSPAR
         else:
             raise UnsupportedSetting(f"Unsupported parity {self._parity}")
-
-    @property
-    def _has_non_posix_baudrate(self) -> bool:
-        return not hasattr(termios, f"B{self._baudrate}")
-
-    def _build_ispeed(self) -> int:
-        return (
-            NON_POSIX_FALLBACK_BAUDRATE_CONST
-            if self._has_non_posix_baudrate
-            else getattr(termios, f"B{self._baudrate}")
-        )
-
-    def _build_ospeed(self) -> int:
-        return (
-            NON_POSIX_FALLBACK_BAUDRATE_CONST
-            if self._has_non_posix_baudrate
-            else getattr(termios, f"B{self._baudrate}")
-        )
-
-    def _apply_attributes(self, attributes: list[Any]) -> None:
-        if not self._has_non_posix_baudrate:
-            super()._apply_attributes(attributes)
-            return
-
-        # One `TCSETS2`, so the line never runs at the placeholder baudrate
-        LOGGER.debug("Setting non-POSIX baudrate %d", self._baudrate)
-        try:
-            self._set_non_posix_baudrate(self._baudrate, attributes)
-        except RuntimeError:
-            # The current state has no speed yet (e.g. `B0`): set the placeholder first
-            super()._apply_attributes(attributes)
-            self._set_non_posix_baudrate(self._baudrate)
 
     def _after_configure_port(self) -> None:
         if TIOCSSERIAL is not None:

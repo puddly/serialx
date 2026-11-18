@@ -58,17 +58,24 @@ MODEM_BIT_MAPPING = {
 assert MODEM_BIT_MAPPING.keys() == ModemPins.__annotations__.keys()
 
 
-class TcsetattrFlags(NamedTuple):
-    """Flags for `termios.tcsetattr`."""
+class TermiosSettings(NamedTuple):
+    """Platform-neutral `termios` settings, the baudrate is a plain integer."""
 
     iflag: int
     oflag: int
     cflag: int
     lflag: int
-    ispeed: int
-    ospeed: int
-    cc_vmin: int
-    cc_vtime: int
+    baudrate: int
+    vmin: int
+    vtime: int
+
+
+def posix_speed(baudrate: int) -> int:
+    """Get the `termios` speed constant of a POSIX baudrate."""
+    try:
+        return cast(int, getattr(termios, f"B{baudrate}"))
+    except AttributeError as exc:
+        raise UnsupportedSetting(f"Unsupported baudrate {baudrate}") from exc
 
 
 def modem_pins_mask_of_value(modem_pins: ModemPins, mask: PinState) -> int:
@@ -199,19 +206,7 @@ class PosixSerial(BaseSerial):
 
         return (iflag, cflag)
 
-    def _build_ispeed(self) -> int:
-        try:
-            return cast(int, getattr(termios, f"B{self._baudrate}"))
-        except AttributeError as exc:
-            raise UnsupportedSetting(f"Unsupported baudrate {self._baudrate}") from exc
-
-    def _build_ospeed(self) -> int:
-        try:
-            return cast(int, getattr(termios, f"B{self._baudrate}"))
-        except AttributeError as exc:
-            raise UnsupportedSetting(f"Unsupported baudrate {self._baudrate}") from exc
-
-    def _build_tcsetattr_flags(self) -> TcsetattrFlags:
+    def _build_termios_settings(self) -> TermiosSettings:
         iflag = 0x00000000
         oflag = 0x00000000
         cflag = 0x00000000
@@ -262,25 +257,42 @@ class PosixSerial(BaseSerial):
                 f"VTIME must be in range 0-255 (inter_byte_timeout={self._inter_byte_timeout})"
             )
 
-        ispeed = self._build_ispeed()
-        ospeed = self._build_ospeed()
-
-        return TcsetattrFlags(
+        return TermiosSettings(
             iflag=iflag,
             oflag=oflag,
             cflag=cflag,
             lflag=lflag,
-            ispeed=ispeed,
-            ospeed=ospeed,
-            cc_vmin=vmin,
-            cc_vtime=vtime,
+            baudrate=self._baudrate,
+            vmin=vmin,
+            vtime=vtime,
         )
 
-    def _apply_attributes(self, attributes: list[Any]) -> None:
-        """Apply a `tcsetattr` attribute list to the port."""
+    def _tcsetattr(self, settings: TermiosSettings, speed: int) -> None:
+        """Apply settings with `tcsetattr`, `speed` is a `termios` speed constant."""
         assert self._fileno is not None
-        # TODO: should we use TCSADRAIN or TCSAFLUSH instead?
-        tcsetattr(self._fileno, termios.TCSANOW, attributes)
+
+        # We only overwrite VMIN and VTIME in the CC array
+        cc = tcgetattr(self._fileno)[6]
+        cc[termios.VMIN] = settings.vmin
+        cc[termios.VTIME] = settings.vtime
+
+        tcsetattr(
+            self._fileno,
+            termios.TCSANOW,  # TODO: should we use TCSADRAIN or TCSAFLUSH instead?
+            [
+                settings.iflag,
+                settings.oflag,
+                settings.cflag,
+                settings.lflag,
+                speed,
+                speed,
+                cc,
+            ],
+        )
+
+    def _write_termios_settings(self, settings: TermiosSettings) -> None:
+        """Apply all settings to the port, platforms override this."""
+        self._tcsetattr(settings, posix_speed(settings.baudrate))
 
     def _after_configure_port(self) -> None:
         pass
@@ -293,37 +305,10 @@ class PosixSerial(BaseSerial):
         if self._fileno is None:
             raise ValueError("Cannot configure, serial port is not open")
 
-        tcsetattr_flags = self._build_tcsetattr_flags()
+        settings = self._build_termios_settings()
+        LOGGER.debug("Configuring serial port: %r", settings)
 
-        # We need to overwrite VMIN and VTIME in the CC array
-        (
-            _iflag,
-            _oflag,
-            _cflag,
-            _lflag,
-            _ispeed,
-            _ospeed,
-            cc,
-        ) = tcgetattr(self._fileno)
-
-        cc[termios.VMIN] = tcsetattr_flags.cc_vmin
-        cc[termios.VTIME] = tcsetattr_flags.cc_vtime
-
-        LOGGER.debug("Configuring serial port: %r + cc=%r", tcsetattr_flags, cc)
-
-        # Finally, set up the serial port
-        self._apply_attributes(
-            [
-                tcsetattr_flags.iflag,
-                tcsetattr_flags.oflag,
-                tcsetattr_flags.cflag,
-                tcsetattr_flags.lflag,
-                tcsetattr_flags.ispeed,
-                tcsetattr_flags.ospeed,
-                cc,
-            ]
-        )
-
+        self._write_termios_settings(settings)
         self._after_configure_port()
 
         self.set_modem_pins(self._modem_pins_on_open())
