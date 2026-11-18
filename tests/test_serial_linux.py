@@ -19,7 +19,7 @@ from typing import Any
 from unittest.mock import ANY, call, patch
 
 from serialx.common import PortSettingsUpdate, StopBits
-from serialx.platforms import serial_posix
+from serialx.platforms import _termios_api
 from serialx.platforms.serial_linux import (
     TERMIOS2_ABI,
     LinuxSerial,
@@ -157,7 +157,7 @@ def test_non_posix_baudrate_falls_back_without_current_speed() -> None:
             patch("serialx.platforms.serial_linux.fcntl.ioctl", side_effect=ioctl),
             patch(
                 "serialx.platforms.serial_posix.tcsetattr",
-                wraps=serial_posix.tcsetattr,
+                wraps=_termios_api.tcsetattr,
             ) as mock_tcsetattr,
             LinuxSerial(left, baudrate=10400) as serial,
         ):
@@ -176,7 +176,7 @@ def test_posix_baudrate_reconfigure_uses_tcsetattr() -> None:
 
             with patch(
                 "serialx.platforms.serial_posix.tcsetattr",
-                wraps=serial_posix.tcsetattr,
+                wraps=_termios_api.tcsetattr,
             ) as mock_tcsetattr:
                 serial.reconfigure_port(stopbits=StopBits.TWO)
 
