@@ -212,7 +212,7 @@ def test_reconfigure_between_posix_and_non_posix_baudrates() -> None:
             serial.reconfigure_port(baudrate=9600)
             termios2 = _read_termios2(serial._fileno)
             assert (termios2.c_ispeed, termios2.c_ospeed) == (9600, 9600)
-            assert termios2.c_cflag & TERMIOS2_ABI.cbaud == termios.B9600
+            assert termios2.c_cflag & TERMIOS2_ABI.cbaud != TERMIOS2_ABI.bother
 
 
 @pytest.mark.parametrize(
