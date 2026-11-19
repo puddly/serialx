@@ -298,17 +298,19 @@ class Win32Serial(BaseSerial):
 
             dcb.fBinary = 1  # Always True on Windows
 
+            # `SetCommState` drives DTR/RTS from the DCB, so keep their current state
+            pins = self._modem_pins_to_apply()
+
             # Flow Control
-            if update.rtscts is not None:
-                if update.rtscts:
-                    dcb.fRtsControl = RTS_CONTROL_HANDSHAKE
-                    dcb.fOutxCtsFlow = 1
-                elif self._rts_on_open is PinState.LOW:
-                    dcb.fRtsControl = RTS_CONTROL_DISABLE
-                    dcb.fOutxCtsFlow = 0
-                else:
-                    dcb.fRtsControl = RTS_CONTROL_ENABLE
-                    dcb.fOutxCtsFlow = 0
+            if self._rtscts:
+                dcb.fRtsControl = RTS_CONTROL_HANDSHAKE
+                dcb.fOutxCtsFlow = 1
+            elif pins.rts is PinState.LOW:
+                dcb.fRtsControl = RTS_CONTROL_DISABLE
+                dcb.fOutxCtsFlow = 0
+            else:
+                dcb.fRtsControl = RTS_CONTROL_ENABLE
+                dcb.fOutxCtsFlow = 0
 
             if update.xonxoff is not None:
                 if update.xonxoff:
@@ -318,16 +320,15 @@ class Win32Serial(BaseSerial):
                     dcb.fOutX = 0
                     dcb.fInX = 0
 
-            if update.dsrdtr is not None:
-                if update.dsrdtr:
-                    dcb.fDtrControl = DTR_CONTROL_HANDSHAKE
-                    dcb.fOutxDsrFlow = 1
-                elif self._dtr_on_open is PinState.LOW:
-                    dcb.fDtrControl = DTR_CONTROL_DISABLE
-                    dcb.fOutxDsrFlow = 0
-                else:
-                    dcb.fDtrControl = DTR_CONTROL_ENABLE
-                    dcb.fOutxDsrFlow = 0
+            if self._dsrdtr:
+                dcb.fDtrControl = DTR_CONTROL_HANDSHAKE
+                dcb.fOutxDsrFlow = 1
+            elif pins.dtr is PinState.LOW:
+                dcb.fDtrControl = DTR_CONTROL_DISABLE
+                dcb.fOutxDsrFlow = 0
+            else:
+                dcb.fDtrControl = DTR_CONTROL_ENABLE
+                dcb.fOutxDsrFlow = 0
 
             dcb.fDsrSensitivity = 0
             dcb.fErrorChar = 0
@@ -337,7 +338,7 @@ class Win32Serial(BaseSerial):
             SetCommState(self._handle, dcb)
 
             # Driver-owned lines (RTS under rtscts, DTR under dsrdtr) are skipped
-            self.set_modem_pins(self._modem_pins_on_open())
+            self.set_modem_pins(pins)
 
             # Clear any errors
             ClearCommError(self._handle)

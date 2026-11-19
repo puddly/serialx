@@ -226,3 +226,25 @@ async def test_async_open_discards_stale_input_and_reconfigure_keeps_data(
         await serial.reconfigure_port(baudrate=19200)
 
         assert _read_master(master, len(data)) == data
+
+
+def test_reconfigure_keeps_modem_pins(pty_pair: tuple[int, str]) -> None:
+    """A reconfigure keeps DTR/RTS as last set, a reopen applies the on-open state."""
+    _master, path = pty_pair
+    applied: list[ModemPins] = []
+
+    def record(self: PosixSerial, modem_pins: ModemPins) -> None:
+        applied.append(modem_pins)
+
+    with patch.object(PosixSerial, "_set_modem_pins", record):
+        serial = Serial(path, baudrate=9600)
+
+        with serial:
+            assert applied[-1] == ModemPins(dtr=PinState.HIGH, rts=PinState.HIGH)
+
+            serial.set_modem_pins(dtr=False, rts=False)
+            serial.reconfigure_port(baudrate=19200)
+            assert applied[-1] == ModemPins(dtr=PinState.LOW, rts=PinState.LOW)
+
+        with serial:
+            assert applied[-1] == ModemPins(dtr=PinState.HIGH, rts=PinState.HIGH)

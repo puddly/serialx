@@ -326,7 +326,7 @@ class PosixSerial(BaseSerial):
 
         self._after_configure_port()
 
-        self.set_modem_pins(self._modem_pins_on_open())
+        self.set_modem_pins(self._modem_pins_to_apply())
 
     def _after_open(self) -> None:
         """Discard stale data once the newly opened port is configured."""
