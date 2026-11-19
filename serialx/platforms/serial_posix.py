@@ -328,6 +328,10 @@ class PosixSerial(BaseSerial):
 
         self.set_modem_pins(self._modem_pins_on_open())
 
+    def _after_open(self) -> None:
+        """Discard stale data once the newly opened port is configured."""
+        assert self._fileno is not None
+
         # Flush input and output buffers to discard stale data
         tcflush(self._fileno, termios.TCIOFLUSH)
 
@@ -553,6 +557,7 @@ class PosixSerialTransport(DescriptorTransport):
         await self._loop.run_in_executor(
             None, self._serial._reconfigure_port, self._serial._all_settings()
         )
+        await self._loop.run_in_executor(None, self._serial._after_open)
 
         if self.is_closing():
             # If we are closing, we should not call `connection_made`

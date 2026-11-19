@@ -640,6 +640,7 @@ class BaseSerial(io.RawIOBase):
         try:
             self._open()
             self._reconfigure_port(self._all_settings())
+            self._after_open()
         except BaseException:
             self.close()
             raise
@@ -648,6 +649,9 @@ class BaseSerial(io.RawIOBase):
     def _open(self) -> None:
         """Open the serial port (platform-specific)."""
         raise NotImplementedError
+
+    def _after_open(self) -> None:
+        """Finish opening once the port is configured (platform-specific)."""
 
     def _all_settings(self) -> PortSettingsUpdate:
         return PortSettingsUpdate(
