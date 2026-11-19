@@ -2,6 +2,7 @@
 
 import asyncio
 import sys
+from unittest.mock import patch
 
 import pytest
 
@@ -11,9 +12,9 @@ if sys.platform != "emscripten":
         allow_module_level=True,
     )
 
-from serialx import Parity, StopBits, create_serial_connection
+from serialx import Parity, StopBits, async_serial_for_url, create_serial_connection
 from serialx.common import SerialException, UnsupportedSetting
-from serialx.platforms.serial_pyodide import PyodideSerial
+from serialx.platforms.serial_pyodide import PyodideSerial, PyodideSerialTransport
 from tests.common import create_pyodide_pair
 
 
@@ -73,3 +74,26 @@ async def test_pyodide_unregistered_port_raises() -> None:
             url="pyodide://not-registered",
             baudrate=115200,
         )
+
+
+async def test_pyodide_reconfigure_releases_break() -> None:
+    """Reconfiguring releases a held break explicitly, only when one is held."""
+    sent: list[bool] = []
+    set_break_condition = PyodideSerialTransport._set_break_condition
+
+    async def record(self: PyodideSerialTransport, enabled: bool) -> None:
+        sent.append(enabled)
+        await set_break_condition(self, enabled)
+
+    with (
+        create_pyodide_pair() as (left, _),
+        patch.object(PyodideSerialTransport, "_set_break_condition", record),
+    ):
+        async with async_serial_for_url(left, baudrate=115200) as serial:
+            await serial.set_break_condition(True)
+            await serial.reconfigure_port(baudrate=9600)
+            assert serial.break_condition is False
+            assert sent == [True, False]
+
+            await serial.reconfigure_port(baudrate=115200)
+            assert sent == [True, False]
