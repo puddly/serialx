@@ -234,6 +234,21 @@ class AsyncSerial:
             dsr=dsr,
         )
 
+    # ---- Break (proxy to transport) ----
+
+    @property
+    def break_condition(self) -> bool:
+        """Get whether the TX line is held in the break condition."""
+        return self.transport.break_condition
+
+    async def set_break_condition(self, enabled: bool) -> None:
+        """Hold the TX line in the break condition (logic low), or release it."""
+        await self.transport.set_break_condition(enabled)
+
+    async def send_break(self, duration: float = 0.25) -> None:
+        """Hold the TX line in the break condition for `duration` seconds."""
+        await self.transport.send_break(duration)
+
     async def reconfigure_port(
         self,
         *,

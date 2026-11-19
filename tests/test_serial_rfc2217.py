@@ -15,12 +15,14 @@ from serialx import Serial, SerialException, create_serial_connection
 from serialx.common import PortSettingsUpdate, UnsupportedSetting, measure_time
 from serialx.platforms.serial_rfc2217 import Rfc2217
 from serialx.platforms.serial_rfc2217.types import (
+    ControlCmdId,
     FlowcontrolResumeCmd,
     FlowcontrolSuspendCmd,
     LineStateFlag,
     ModemStateFlag,
     NotifyLinestateCmd,
     NotifyModemstateCmd,
+    SetControlCmd,
     SignatureCmd,
     TelnetOption,
     WillCmd,
@@ -81,6 +83,19 @@ def test_invalid_byte_size_rejected_before_sending() -> None:
     engine = Rfc2217()
     with pytest.raises(UnsupportedSetting):
         list(engine.build_port_config_commands(PortSettingsUpdate(byte_size=123)))
+
+
+def test_build_break_command() -> None:
+    """Break on/off map to the SET_CONTROL break values."""
+    engine = Rfc2217()
+    assert engine.build_break_command(True) == SetControlCmd(
+        control=ControlCmdId.SET_BREAK_ON
+    )
+    assert engine.build_break_command(False) == SetControlCmd(
+        control=ControlCmdId.SET_BREAK_OFF
+    )
+    assert engine.build_break_command(True).to_bytes() == b"\x05"
+    assert engine.build_break_command(False).to_bytes() == b"\x06"
 
 
 def test_sync_negotiate_timeout_silent_server() -> None:

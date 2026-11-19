@@ -337,6 +337,12 @@ class Rfc2217:
         elif modem_pins.rts is PinState.LOW:
             yield SetControlCmd(control=ControlCmdId.SET_RTS_OFF)
 
+    def build_break_command(self, enabled: bool) -> SetControlCmd:
+        """Build the SET_CONTROL command that sets or clears the break condition."""
+        return SetControlCmd(
+            control=ControlCmdId.SET_BREAK_ON if enabled else ControlCmdId.SET_BREAK_OFF
+        )
+
     def get_modem_pins(self) -> ModemPins:
         """Return modem pin state from the last NOTIFY-MODEMSTATE."""
         state = self._modemstate
@@ -674,6 +680,10 @@ class RFC2217Serial(SocketSerial):
         for cmd in self._engine.build_modem_pin_commands(modem_pins):
             self._send_and_wait(cmd)
 
+    def _set_break_condition(self, enabled: bool) -> None:
+        """Set or clear the break condition via a SET_CONTROL command."""
+        self._send_and_wait(self._engine.build_break_command(enabled))
+
     def _get_modem_pins(self) -> ModemPins:
         """Return modem pin state from the last NOTIFY-MODEMSTATE."""
 
@@ -927,6 +937,11 @@ class RFC2217SerialTransport(BaseSerialTransport):
 
         for cmd in self._serial._engine.build_modem_pin_commands(modem_pins):
             await self._send_and_wait(cmd)
+
+    async def _set_break_condition(self, enabled: bool) -> None:
+        """Set or clear the break condition via a SET_CONTROL command."""
+        assert self._serial is not None
+        await self._send_and_wait(self._serial._engine.build_break_command(enabled))
 
     def _resolve_pending_waiters(self) -> None:
         """Resolve any async waiters whose commands have now been parsed."""

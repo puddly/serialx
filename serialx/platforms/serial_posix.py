@@ -57,6 +57,17 @@ MODEM_BIT_MAPPING = {
 }
 assert MODEM_BIT_MAPPING.keys() == ModemPins.__annotations__.keys()
 
+# Python's `termios` lacks the break ioctls. BSDs (and Linux on SPARC) use
+# `_IO('t', 123)` and `_IO('t', 122)`, every other Linux architecture the generic
+# `asm-generic/ioctls.h` numbers.
+if sys.platform.startswith("linux") and not os.uname().machine.startswith("sparc"):
+    _TIOCSBRK, _TIOCCBRK = 0x5427, 0x5428
+else:
+    _TIOCSBRK, _TIOCCBRK = 0x2000747B, 0x2000747A
+
+TIOCSBRK: int = getattr(termios, "TIOCSBRK", _TIOCSBRK)
+TIOCCBRK: int = getattr(termios, "TIOCCBRK", _TIOCCBRK)
+
 
 class TcsetattrFlags(NamedTuple):
     """Flags for `termios.tcsetattr`."""
@@ -387,6 +398,21 @@ class PosixSerial(BaseSerial):
             if exc.errno == errno.ENOTTY:
                 LOGGER.debug("Device is not a serial port, cannot set modem pins")
 
+    def _set_break_condition(self, enabled: bool) -> None:
+        """Set or clear the break condition."""
+        assert self._fileno is not None
+
+        try:
+            fcntl.ioctl(self._fileno, TIOCSBRK if enabled else TIOCCBRK)
+        except OSError as exc:
+            # Not a tty, or a tty driver without break support
+            if exc.errno == errno.ENOTTY:
+                raise UnsupportedSetting(
+                    f"Device {self._path!r} does not support break"
+                ) from exc
+
+            raise
+
     def _flush(self) -> None:
         """Flush write buffers, waiting until all data is written."""
         assert self._fileno is not None
@@ -585,6 +611,13 @@ class PosixSerialTransport(DescriptorTransport):
         """Set modem control bits, internal."""
         assert self._serial is not None
         await self._loop.run_in_executor(None, self._serial.set_modem_pins, modem_pins)
+
+    async def _set_break_condition(self, enabled: bool) -> None:
+        """Set or clear the break condition, internal."""
+        assert self._serial is not None
+        await self._loop.run_in_executor(
+            None, self._serial._set_break_condition, enabled
+        )
 
     async def _reconfigure_port(self, update: PortSettingsUpdate) -> None:
         assert self._serial is not None

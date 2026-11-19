@@ -15,7 +15,15 @@ if sys.platform == "emscripten":
         allow_module_level=True,
     )
 
-from serialx import ModemPins, Parity, PinState, Serial, StopBits, serial_for_url
+from serialx import (
+    ModemPins,
+    Parity,
+    PinState,
+    Serial,
+    StopBits,
+    UnsupportedSetting,
+    serial_for_url,
+)
 from tests.common import (
     SerialBackend,
     SerialPair,
@@ -427,6 +435,64 @@ def test_sync_invalid_byte_size(serial_pair: SerialPair) -> None:
     with pytest.raises(Exception):
         with Serial.from_url(serial_pair.left, baudrate=115200, byte_size=123):
             pass
+
+
+def test_sync_break_condition(serial_pair: SerialPair) -> None:
+    """Test setting and clearing the break condition, and data flow afterwards."""
+    with (
+        Serial.from_url(serial_pair.left, baudrate=115200) as left,
+        Serial.from_url(serial_pair.right, baudrate=115200) as right,
+    ):
+        assert left.break_condition is False
+
+        if SerialQuirk.NO_BREAK in serial_pair.quirks:
+            with pytest.raises(UnsupportedSetting):
+                left.break_condition = True
+
+            with pytest.raises(UnsupportedSetting):
+                left.send_break(0.01)
+
+            assert left.break_condition is False
+            return
+
+        left.break_condition = True
+        assert left.break_condition is True
+
+        # A break shorter than a character is not received as a NUL byte
+        time.sleep(0.01)
+        left.break_condition = False
+        assert left.break_condition is False
+
+        left.send_break(0.05)
+        assert left.break_condition is False
+
+        # Real UARTs receive a break as a NUL byte
+        data = b"after break"
+        left.write(data)
+        received = right.read_until(data)
+        assert received.endswith(data)
+        assert received[: -len(data)].strip(b"\x00") == b""
+
+
+def test_sync_break_condition_resets_on_reopen(serial_pair: SerialPair) -> None:
+    """Test that closing the port forgets the tracked break condition."""
+    if SerialQuirk.NO_BREAK in serial_pair.quirks:
+        pytest.skip("Backend does not support break")
+
+    left = Serial.from_url(serial_pair.left, baudrate=115200)
+
+    with left:
+        left.break_condition = True
+        left.break_condition = False
+        left.break_condition = True
+
+    assert left.break_condition is False
+
+    with left:
+        assert left.break_condition is False
+
+        # Closing may leave the break held on the device, release it for later tests
+        left.break_condition = False
 
 
 @pytest.mark.parametrize("xonxoff", [True, False])

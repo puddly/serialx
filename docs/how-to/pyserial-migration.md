@@ -109,6 +109,13 @@ Configuring an unopened port through its properties is deprecated. Pass settings
 +serial.open()
 ```
 
+### Sending a break
+`send_break()` and `break_condition` keep their pyserial names. Assigning `break_condition` on a closed port raises `SerialException`, pyserial stores the value without ever applying it.
+
+`send_break(duration)` holds the break for `duration` seconds on every platform. pyserial on POSIX passes the duration to `tcsendbreak`, where the break length is platform-defined and durations under 0.25 s are not honoured.
+
+`socket://` and `esphome://` ports cannot carry a break and raise `serialx.UnsupportedSetting`. pyserial's `socket://` handler logs and ignores it.
+
 ## Constants
 pyserial exposes parity, stop bit, and byte size settings as module-level constants (`serial.PARITY_NONE`, `serial.STOPBITS_ONE`, etc.). serialx replaces them with the `Parity` and `StopBits` enums. Properties like `serial.parity` and `serial.stopbits` now return enum members instead of raw strings or numbers.
 
@@ -169,6 +176,16 @@ if pins.cts is serialx.PinState.HIGH:
 :::
 
 `set_modem_pins` accepts individual pin kwargs or a full `ModemPins` dataclass. Pins omitted from the call are left unchanged. `get_modem_pins` returns a `ModemPins` dataclass of `PinState` enum values, call `.to_bool()` on a pin for a `bool | None`.
+
+### Sending a break
+`transport.serial.send_break()` and `transport.serial.break_condition = True` block the event loop too. Use the async methods on the transport:
+
+```diff
+-transport.serial.send_break(duration=0.25)
++await transport.send_break(duration=0.25)
+-transport.serial.break_condition = True
++await transport.set_break_condition(True)
+```
 
 ### Changing port settings
 Assigning to `transport.serial.baudrate` reconfigures the port on the event loop, which is blocking IO. Use the async method on the transport instead:

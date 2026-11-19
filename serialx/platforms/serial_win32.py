@@ -58,6 +58,7 @@ from ..common import (
 )
 from ._win32api import (
     CancelIo,
+    ClearCommBreak,
     ClearCommError,
     CloseHandle,
     CreateEvent,
@@ -70,6 +71,7 @@ from ._win32api import (
     PurgeComm,
     ReadFile,
     ResetEvent,
+    SetCommBreak,
     SetCommState,
     SetCommTimeouts,
     SetupComm,
@@ -403,6 +405,14 @@ class Win32Serial(BaseSerial):
             EscapeCommFunction(  # type:ignore[call-arg]
                 self._handle, (SETDTR if modem_pins.dtr is PinState.HIGH else CLRDTR)
             )
+
+    def _set_break_condition(self, enabled: bool) -> None:
+        """Set or clear the break condition."""
+        assert self._handle is not None
+        if enabled:
+            SetCommBreak(self._handle)
+        else:
+            ClearCommBreak(self._handle)
 
     def num_unread_bytes(self) -> int:
         """Return the number of bytes waiting to be read."""
@@ -825,6 +835,13 @@ class Win32SerialTransport(BaseSerialTransport):
         """Set modem control bits, internal."""
         assert self._serial is not None
         await self._loop.run_in_executor(None, self._serial.set_modem_pins, modem_pins)
+
+    async def _set_break_condition(self, enabled: bool) -> None:
+        """Set or clear the break condition, internal."""
+        assert self._serial is not None
+        await self._loop.run_in_executor(
+            None, self._serial._set_break_condition, enabled
+        )
 
     async def _reconfigure_port(self, update: PortSettingsUpdate) -> None:
         assert self._serial is not None

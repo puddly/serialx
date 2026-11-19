@@ -574,6 +574,9 @@ class BaseSerial(io.RawIOBase):
         self._dtr_state = PinState.UNDEFINED
         self._rts_state = PinState.UNDEFINED
 
+        # Last-written break condition, hardware cannot report it
+        self._break_condition = False
+
         self._auto_close = False
 
         # Compatibility kwargs
@@ -637,6 +640,7 @@ class BaseSerial(io.RawIOBase):
     def open(self) -> None:
         """Open the serial port."""
         self._broken = None
+        self._break_condition = False
         try:
             self._open()
             self._reconfigure_port(self._all_settings())
@@ -748,6 +752,7 @@ class BaseSerial(io.RawIOBase):
     @maybe_wrap_exceptions
     def close(self) -> None:
         """Close the serial port."""
+        self._break_condition = False
         self._close()
 
     @abstractmethod
@@ -851,6 +856,42 @@ class BaseSerial(io.RawIOBase):
         self._check_broken()
         effective_timeout = self._read_timeout if timeout is None else timeout
         return self._readinto(b, timeout=effective_timeout)
+
+    @property
+    def break_condition(self) -> bool:
+        """Get whether the TX line is held in the break condition."""
+        return self._break_condition
+
+    @break_condition.setter
+    def break_condition(self, value: bool) -> None:
+        """Hold the TX line in the break condition, or release it."""
+        self.set_break_condition(bool(value))
+
+    @maybe_wrap_exceptions
+    def set_break_condition(self, enabled: bool) -> None:
+        """Hold the TX line in the break condition (logic low), or release it.
+
+        Pending output is not drained first; call `flush` beforehand to send it.
+        """
+        self._check_broken()
+        if not self.is_open:
+            raise SerialException("Serial port is not open")
+
+        LOGGER.debug("Setting break condition: %r", enabled)
+        self._set_break_condition(enabled)
+        self._break_condition = bool(enabled)
+
+    def send_break(self, duration: float = 0.25) -> None:
+        """Hold the TX line in the break condition for `duration` seconds."""
+        self.set_break_condition(True)
+        try:
+            time.sleep(duration)
+        finally:
+            self.set_break_condition(False)
+
+    def _set_break_condition(self, enabled: bool) -> None:
+        """Set or clear the break condition, internal."""
+        raise UnsupportedSetting(f"{type(self).__name__} does not support break")
 
     @abstractmethod
     def _readinto(self, b: Buffer, *, timeout: float | None) -> int:
@@ -1501,6 +1542,50 @@ class BaseSerialTransport(asyncio.Transport):
             )
 
         return await self._set_modem_pins(pins)
+
+    @property
+    def break_condition(self) -> bool:
+        """Get whether the TX line is held in the break condition."""
+        if self._serial is None or self._closing:
+            return False
+
+        return self._serial._break_condition
+
+    async def set_break_condition(self, enabled: bool) -> None:
+        """Hold the TX line in the break condition (logic low), or release it.
+
+        Pending output is not drained first; await `flush` beforehand to send it.
+        """
+        self._check_broken()
+        assert self._serial is not None
+        LOGGER.debug("Setting break condition: %r", enabled)
+        await self._set_break_condition(enabled)
+
+        # The transport may have been closed while the call was in flight
+        if self._serial is not None:
+            self._serial._break_condition = bool(enabled)
+
+    async def send_break(self, duration: float = 0.25) -> None:
+        """Hold the TX line in the break condition for `duration` seconds.
+
+        If cancelled, the break is released before the cancellation propagates,
+        which waits for the backend (for RFC 2217, the server's acknowledgement).
+        """
+        try:
+            await self.set_break_condition(True)
+        except asyncio.CancelledError:
+            # The request may already have reached the device
+            await self.set_break_condition(False)
+            raise
+
+        try:
+            await asyncio.sleep(duration)
+        finally:
+            await self.set_break_condition(False)
+
+    async def _set_break_condition(self, enabled: bool) -> None:
+        """Set or clear the break condition, internal."""
+        raise UnsupportedSetting(f"{type(self).__name__} does not support break")
 
     async def flush(self) -> None:
         """Flush write buffers, waiting until all data is written."""
