@@ -177,13 +177,6 @@ def test_serial_repr_unopened() -> None:
     )
 
 
-def test_serial_repr_redacts_secrets() -> None:
-    """repr() does not include secret query parameters from the URL."""
-    serial = Serial.from_url("esphome://host/?key=c2VjcmV0", baudrate=115200)
-    assert "c2VjcmV0" not in repr(serial)
-    assert "path='esphome://host/?key=REDACTED'" in repr(serial)
-
-
 def test_backend_connect_kwargs_match_typed_dict() -> None:
     """Every kwarg in the runtime table is also declared on `AllConnectKwargs`."""
     declared: set[str] = set()

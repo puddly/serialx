@@ -1090,6 +1090,13 @@ async def test_missing_hostname_error_redacts_key(url: str) -> None:
     assert redact_uri(url) in str(exc.value)
 
 
+def test_serial_repr_redacts_key() -> None:
+    """repr() does not include the encryption key from the URL."""
+    serial = ESPHomeSerial("esphome://host/?key=c2VjcmV0", baudrate=115200)
+    assert "c2VjcmV0" not in repr(serial)
+    assert "path='esphome://host/?key=REDACTED'" in repr(serial)
+
+
 def test_invalid_mode_kwarg() -> None:
     """An unknown `mode` kwarg is rejected immediately."""
     with pytest.raises(InvalidSettingsError, match="Invalid serial proxy mode"):
