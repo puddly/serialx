@@ -73,6 +73,9 @@ are listed in the [main API documentation](../api.md). The most common ones are 
 | `baudrate = X`              | `reconfigure_port(baudrate=X)` | Setters are deprecated                   |
 | `stop_bits = X`             | `reconfigure_port(stopbits=X)` | Setters are deprecated                   |
 | `data_bits = X`             | `reconfigure_port(byte_size=X)` | Setters are deprecated                  |
+| `rtscts = X`                | `reconfigure_port(rtscts=X)` | Read-only                                |
+| `xonxoff = X`               | `reconfigure_port(xonxoff=X)` | Read-only                               |
+| `dsrdtr = X`                | `reconfigure_port(dsrdtr=X)` | Read-only                                |
 | `SerialPortInfo[i]`         | attribute access           | Slicing `SerialPortInfo` is deprecated       |
 | `SerialPortInfo.description`| `SerialPortInfo.product`   |                                              |
 

@@ -912,6 +912,21 @@ class BaseSerial(io.RawIOBase):
         return self._stopbits
 
     @property
+    def xonxoff(self) -> bool:
+        """Get whether XON/XOFF software flow control is enabled."""
+        return self._xonxoff
+
+    @property
+    def rtscts(self) -> bool:
+        """Get whether RTS/CTS hardware flow control is enabled."""
+        return self._rtscts
+
+    @property
+    def dsrdtr(self) -> bool:
+        """Get whether DSR/DTR hardware flow control is enabled."""
+        return self._dsrdtr
+
+    @property
     def dtr_on_open(self) -> PinState:
         """Get the DTR pin state (on open) setting."""
         return self._dtr_on_open
