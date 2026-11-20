@@ -739,8 +739,12 @@ def test_sync_read_timeout_with_partial_data(serial_pair: SerialPair) -> None:
         with measure_time() as elapsed:
             result = right.read(5)
 
-        assert result == b"hello"
+        # `read()` returns what has arrived, a relay can deliver it in pieces
+        assert result
+        assert b"hello".startswith(result)
         assert elapsed() < 0.2
+
+        assert result + right.readexactly(5 - len(result)) == b"hello"
 
 
 def test_sync_short_timeout_preserves_buffered_bytes(serial_pair: SerialPair) -> None:
