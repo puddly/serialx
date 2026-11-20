@@ -20,7 +20,16 @@ import os.path
 from pathlib import Path
 import time
 from types import TracebackType
-from typing import TYPE_CHECKING, Any, Concatenate, NamedTuple, ParamSpec, TypeVar, cast
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Concatenate,
+    NamedTuple,
+    NoReturn,
+    ParamSpec,
+    TypeVar,
+    cast,
+)
 import urllib.parse
 import warnings
 
@@ -601,19 +610,15 @@ class BaseSerial(io.RawIOBase):
         if self._broken is None:
             self._broken = exc
 
-    def _check_usable(self) -> None:
+    def _check_broken(self) -> None:
         if not self.is_open:
             raise SerialException("Attempting to use a port that is not open")
 
         if self._broken is not None:
-            self._check_broken()
+            self._raise_broken(self._broken)
 
-    def _check_broken(self) -> None:
-        if self._broken is None:
-            return
-
-        exc = self._broken
-
+    @staticmethod
+    def _raise_broken(exc: Exception) -> NoReturn:
         # Re-raising the same instance grows its `__traceback__` on every raise
         try:
             fresh = copy.copy(exc)
@@ -780,7 +785,7 @@ class BaseSerial(io.RawIOBase):
     @maybe_wrap_exceptions
     def get_modem_pins(self) -> ModemPins:
         """Get modem control bits."""
-        self._check_usable()
+        self._check_broken()
         pins = self._get_modem_pins()
         return dataclasses.replace(
             pins,
@@ -818,7 +823,7 @@ class BaseSerial(io.RawIOBase):
         dsr: PinState | bool | None = PinState.UNDEFINED,
     ) -> None:
         """Set modem control bits."""
-        self._check_usable()
+        self._check_broken()
 
         pins = modem_pins
         if pins is None:
@@ -855,7 +860,7 @@ class BaseSerial(io.RawIOBase):
     @maybe_wrap_exceptions
     def readinto(self, b: Buffer, *, timeout: float | None = None) -> int:
         """Read bytes from serial port into buffer."""
-        self._check_usable()
+        self._check_broken()
         effective_timeout = self._read_timeout if timeout is None else timeout
         return self._readinto(b, timeout=effective_timeout)
 
@@ -867,7 +872,7 @@ class BaseSerial(io.RawIOBase):
     @maybe_wrap_exceptions
     def write(self, data: Buffer, *, timeout: float | None = None) -> int:
         """Write bytes to serial port."""
-        self._check_usable()
+        self._check_broken()
         effective_timeout = self._write_timeout if timeout is None else timeout
         return self._write(data, timeout=effective_timeout)
 
@@ -878,7 +883,7 @@ class BaseSerial(io.RawIOBase):
 
     def flush(self) -> None:
         """Flush write buffers."""
-        self._check_usable()
+        self._check_broken()
         self._flush()
 
     @abstractmethod
@@ -1040,7 +1045,7 @@ class BaseSerial(io.RawIOBase):
     @maybe_wrap_exceptions
     def reset_read_buffer(self) -> None:
         """Reset the read buffer."""
-        self._check_usable()
+        self._check_broken()
         self._reset_read_buffer()
 
     @abstractmethod
@@ -1051,7 +1056,7 @@ class BaseSerial(io.RawIOBase):
     @maybe_wrap_exceptions
     def reset_write_buffer(self) -> None:
         """Reset the write buffer."""
-        self._check_usable()
+        self._check_broken()
         self._reset_write_buffer()
 
     @abstractmethod
@@ -1341,8 +1346,9 @@ class BaseSerialTransport(asyncio.Transport):
             self._serial._mark_broken(exc)
 
     def _check_broken(self) -> None:
-        if self._serial is not None:
-            self._serial._check_broken()
+        # Some transports never open their sync object, so only its stored error counts
+        if self._serial is not None and self._serial._broken is not None:
+            self._serial._raise_broken(self._serial._broken)
 
     def is_closing(self) -> bool:
         """Return whether the transport is closing."""
