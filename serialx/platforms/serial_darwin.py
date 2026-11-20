@@ -14,6 +14,7 @@ from serialx.common import SerialPortInfo, register_uri_handler
 from serialx.serialx_rust import list_serial_ports_impl
 
 from .serial_extended_posix import ExtendedPosixSerial, ExtendedPosixSerialTransport
+from .serial_posix import TermiosSettings
 
 LOGGER = logging.getLogger(__name__)
 
@@ -27,24 +28,6 @@ NON_POSIX_FALLBACK_BAUDRATE_CONST = termios.B115200
 class DarwinSerial(ExtendedPosixSerial):
     """Darwin serial port implementation."""
 
-    def _build_ispeed(self) -> int:
-        return (
-            NON_POSIX_FALLBACK_BAUDRATE_CONST
-            if self._has_non_posix_baudrate
-            else getattr(termios, f"B{self._baudrate}")
-        )
-
-    def _build_ospeed(self) -> int:
-        return (
-            NON_POSIX_FALLBACK_BAUDRATE_CONST
-            if self._has_non_posix_baudrate
-            else getattr(termios, f"B{self._baudrate}")
-        )
-
-    @property
-    def _has_non_posix_baudrate(self) -> bool:
-        return not hasattr(termios, f"B{self._baudrate}")
-
     def _set_non_posix_baudrate(self, baudrate: int) -> None:
         """Set the baudrate of the serial port."""
         assert self._fileno is not None
@@ -57,10 +40,16 @@ class DarwinSerial(ExtendedPosixSerial):
             if exc.errno == errno.ENOTTY:
                 LOGGER.debug("Device is not a serial port, cannot set baudrate")
 
-    def _after_configure_port(self) -> None:  # noqa: C901
-        if self._has_non_posix_baudrate:
-            LOGGER.debug("Setting non-POSIX baudrate %d", self._baudrate)
-            self._set_non_posix_baudrate(self._baudrate)
+    def _write_termios_settings(self, settings: TermiosSettings) -> None:
+        if hasattr(termios, f"B{settings.baudrate}"):
+            super()._write_termios_settings(settings)
+            return
+
+        # `IOSSIOSPEED` only sets the speed, so the other settings are applied first
+        self._tcsetattr(settings, NON_POSIX_FALLBACK_BAUDRATE_CONST)
+
+        LOGGER.debug("Setting non-POSIX baudrate %d", settings.baudrate)
+        self._set_non_posix_baudrate(settings.baudrate)
 
 
 class DarwinSerialTransport(ExtendedPosixSerialTransport):
