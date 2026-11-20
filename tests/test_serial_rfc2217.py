@@ -1,7 +1,11 @@
 """RFC2217 serial port tests."""
 
 import asyncio
+from collections.abc import Iterator
+import contextlib
+import socket
 import sys
+import threading
 
 import pytest
 
@@ -13,17 +17,21 @@ if sys.platform == "emscripten":
 
 from serialx import Serial, SerialException, create_serial_connection
 from serialx.common import PortSettingsUpdate, UnsupportedSetting, measure_time
-from serialx.platforms.serial_rfc2217 import Rfc2217
+from serialx.platforms.serial_rfc2217 import Rfc2217, TelnetParser
 from serialx.platforms.serial_rfc2217.types import (
+    DoCmd,
     FlowcontrolResumeCmd,
     FlowcontrolSuspendCmd,
     LineStateFlag,
     ModemStateFlag,
     NotifyLinestateCmd,
     NotifyModemstateCmd,
+    Rfc2217Command,
+    SetBaudrateCmd,
     SignatureCmd,
     TelnetOption,
     WillCmd,
+    encode_command,
 )
 
 from .common import HUB4COM_BINARY, SerialBackend, SerialPair, create_hub4com_pair
@@ -120,6 +128,74 @@ def test_sync_peer_close_during_negotiation_raises() -> None:
                 f"rfc2217://{addr}", baudrate=115200, connect_timeout=2.0
             ):
                 pass
+
+
+@contextlib.contextmanager
+def create_rfc2217_ack_server() -> Iterator[tuple[str, list[Rfc2217Command]]]:
+    """Accept one client, agree to every option, and ack every COM-PORT command."""
+    server = socket.create_server(("127.0.0.1", 0))
+    received: list[Rfc2217Command] = []
+
+    def serve() -> None:
+        client, _ = server.accept()
+        parser = TelnetParser()
+        # The client may close while an answer is still being sent
+        with client, contextlib.suppress(OSError):
+            while data := client.recv(4096):
+                for item in parser.feed(data):
+                    if isinstance(item, WillCmd):
+                        client.sendall(encode_command(DoCmd(option=item.option)))
+                    elif isinstance(item, DoCmd):
+                        client.sendall(encode_command(WillCmd(option=item.option)))
+                    elif isinstance(item, Rfc2217Command):
+                        received.append(item)
+                        # The client also accepts the unshifted command code
+                        client.sendall(encode_command(item))
+
+    thread = threading.Thread(target=serve, daemon=True)
+    thread.start()
+
+    try:
+        yield f"127.0.0.1:{server.getsockname()[1]}", received
+    finally:
+        server.close()
+        thread.join(timeout=1)
+
+
+def test_sync_rejected_setting_sends_nothing() -> None:
+    """A rejected byte size fails before any setting reaches the server."""
+    with create_rfc2217_ack_server() as (addr, received):
+        with Serial.from_url(f"rfc2217://{addr}", baudrate=9600) as serial:
+            received.clear()
+
+            with pytest.raises(UnsupportedSetting):
+                serial.reconfigure_port(baudrate=19200, byte_size=9)
+
+            # Round trip a valid setting so anything sent earlier has arrived
+            serial.reconfigure_port(baudrate=9600)
+            assert received == [SetBaudrateCmd(baudrate=9600)]
+
+
+async def test_async_rejected_setting_sends_nothing() -> None:
+    """A rejected byte size fails before any setting reaches the server."""
+    with create_rfc2217_ack_server() as (addr, received):
+        transport, _ = await create_serial_connection(
+            asyncio.get_running_loop(),
+            asyncio.Protocol,
+            url=f"rfc2217://{addr}",
+            baudrate=9600,
+        )
+        try:
+            received.clear()
+
+            with pytest.raises(UnsupportedSetting):
+                await transport.reconfigure_port(baudrate=19200, byte_size=9)
+
+            # Round trip a valid setting so anything sent earlier has arrived
+            await transport.reconfigure_port(baudrate=9600)
+            assert received == [SetBaudrateCmd(baudrate=9600)]
+        finally:
+            transport.close()
 
 
 @pytest.mark.skipif(not HUB4COM_BINARY, reason="hub4com not available")

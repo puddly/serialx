@@ -478,7 +478,7 @@ class RFC2217Serial(SocketSerial):
 
     def _build_port_config_commands(
         self, update: PortSettingsUpdate
-    ) -> Generator[Rfc2217Command]:
+    ) -> tuple[Rfc2217Command, ...]:
         # Flow control is a single RFC 2217 setting, so send the merged state
         if update.rtscts is not None or update.xonxoff is not None:
             settings = dataclasses.replace(
@@ -487,7 +487,8 @@ class RFC2217Serial(SocketSerial):
         else:
             settings = update
 
-        return self._engine.build_port_config_commands(settings)
+        # Build all commands first, so an invalid setting sends nothing
+        return tuple(self._engine.build_port_config_commands(settings))
 
     def _reconfigure_port(self, update: PortSettingsUpdate) -> None:
         """Send serial port configuration to the access server."""
