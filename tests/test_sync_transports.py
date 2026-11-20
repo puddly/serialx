@@ -470,6 +470,7 @@ def test_sync_reconfigure_flow_control(serial_pair: SerialPair) -> None:
             assert right.readexactly(6) == b"before"
 
             left.reconfigure_port(rtscts=True, xonxoff=False, dsrdtr=False)
+            assert left.rtscts is True
 
             left.write(b"after")
             assert right.readexactly(5) == b"after"

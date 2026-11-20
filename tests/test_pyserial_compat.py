@@ -157,6 +157,37 @@ def test_reconfigure_port_closed_raises() -> None:
         s.reconfigure_port(baudrate=115200)
 
 
+def test_flow_control_properties_closed() -> None:
+    """Flow control settings passed to the constructor read back as properties."""
+    s = Serial()
+    assert s.xonxoff is False
+    assert s.rtscts is False
+    assert s.dsrdtr is False
+
+    s = Serial(xonxoff=True, rtscts=True, dsrdtr=True)
+    assert s.xonxoff is True
+    assert s.rtscts is True
+    assert s.dsrdtr is True
+
+
+@pytest.mark.parametrize("name", ["xonxoff", "rtscts", "dsrdtr"])
+def test_flow_control_properties_read_only(name: str) -> None:
+    """Assigning a flow control setting raises instead of silently doing nothing."""
+    s = Serial()
+    with pytest.raises(AttributeError):
+        setattr(s, name, True)
+    assert getattr(s, name) is False
+
+
+def test_flow_control_properties_reconfigure(serial_pair: SerialPair) -> None:
+    """Flow control properties follow `reconfigure_port` on an open port."""
+    with Serial.from_url(serial_pair.left, baudrate=9600) as s:
+        s.reconfigure_port(xonxoff=True)
+        assert s.xonxoff is True
+        assert s.rtscts is False
+        assert s.dsrdtr is False
+
+
 def test_compat_no_arg_construction() -> None:
     """Test that Serial can be constructed with no args (deferred open pattern)."""
     s = Serial()
