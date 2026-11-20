@@ -11,6 +11,18 @@ from urllib.parse import urlparse
 from serialx import SerialPortInfo, list_serial_ports
 
 
+def hwid(info: SerialPortInfo) -> str:
+    """Hardware ID of a port in the format of pyserial's `ListPortInfo.hwid`."""
+    if info.vid is None or info.pid is None:
+        return "n/a"
+
+    serial_number = ""
+    if info.serial_number is not None:
+        serial_number = f" SER={info.serial_number}"  # codespell:ignore ser
+
+    return f"USB VID:PID={info.vid:04X}:{info.pid:04X}{serial_number}"
+
+
 def _list_links(
     ports: list[SerialPortInfo], dev_dir: str = "/dev"
 ) -> list[SerialPortInfo]:
@@ -45,12 +57,12 @@ def grep(regexp: str, include_links: bool = False) -> Iterable[SerialPortInfo]:
         if (
             pattern.search(str(info.device))
             or pattern.search(info.description)
-            or pattern.search(info.hwid)
+            or pattern.search(hwid(info))
         ):
             yield info
 
 
-__all__ = ["comports", "grep"]
+__all__ = ["comports", "grep", "hwid"]
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="List serial ports.")

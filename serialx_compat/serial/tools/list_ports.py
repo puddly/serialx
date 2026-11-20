@@ -5,9 +5,9 @@ from __future__ import annotations
 import argparse
 import sys
 
-from serialx.tools.list_ports import comports, grep
+from serialx.tools.list_ports import comports, grep, hwid
 
-__all__ = ["comports", "grep", "main"]
+__all__ = ["comports", "grep", "hwid", "main"]
 
 
 def main(argv: list[str] | None = None) -> None:
@@ -64,7 +64,7 @@ def main(argv: list[str] | None = None) -> None:
 
         if args.verbose:
             sys.stdout.write(f"    desc: {port.description}\n")
-            sys.stdout.write(f"    hwid: {port.hwid}\n")
+            sys.stdout.write(f"    hwid: {hwid(port)}\n")
 
     if not args.quiet:
         sys.stderr.write(f"{len(found)} ports found\n" if found else "no ports found\n")

@@ -1636,7 +1636,7 @@ class SerialPortInfo:
             DeprecationWarning,
             stacklevel=2,
         )
-        return (str(self.device), self.description, self.hwid)[key]
+        return (str(self.device), self.description, "")[key]
 
     @property
     def description(self) -> str:
@@ -1655,17 +1655,6 @@ class SerialPortInfo:
             return self.product
 
         return os.path.basename(self.resolved_device)
-
-    @property
-    def hwid(self) -> str:
-        """Hardware ID in the format of pyserial's `ListPortInfo.hwid`."""
-        if self.vid is None or self.pid is None:
-            return "n/a"
-
-        serial_number = ""
-        if self.serial_number is not None:
-            serial_number = f" SER={self.serial_number}"  # codespell:ignore ser
-        return f"USB VID:PID={self.vid:04X}:{self.pid:04X}{serial_number}"
 
 
 def list_serial_ports(

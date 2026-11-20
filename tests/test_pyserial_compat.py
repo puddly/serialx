@@ -33,7 +33,7 @@ from serialx import (
     SerialPortInfo,
 )
 from serialx.tools import list_ports
-from serialx.tools.list_ports import comports, grep
+from serialx.tools.list_ports import comports, grep, hwid
 from serialx.tools.list_ports_common import ListPortInfo
 from tests.common import SerialPair
 
@@ -281,14 +281,13 @@ def _port(device: str, **kwargs: object) -> SerialPortInfo:
 
 
 def test_hwid_matches_pyserial_format() -> None:
-    """`hwid` uses pyserial's format, and is the third item of the tuple access."""
+    """`hwid` formats a port's hardware ID like pyserial's `ListPortInfo.hwid`."""
     usb = _port("/dev/ttyUSB0", vid=0x0403, pid=0x6001, serial_number="AB12CD34")
-    assert usb.hwid == "USB VID:PID=0403:6001 SER=AB12CD34"  # codespell:ignore ser
-    assert _port("/dev/ttyUSB1", vid=0x10C4, pid=0xEA60).hwid == "USB VID:PID=10C4:EA60"
-    assert _port("/dev/ttyS0").hwid == "n/a"
-
-    with pytest.warns(DeprecationWarning):
-        assert usb[2] == usb.hwid
+    assert hwid(usb) == "USB VID:PID=0403:6001 SER=AB12CD34"  # codespell:ignore ser
+    assert (
+        hwid(_port("/dev/ttyUSB1", vid=0x10C4, pid=0xEA60)) == "USB VID:PID=10C4:EA60"
+    )
+    assert hwid(_port("/dev/ttyS0")) == "n/a"
 
 
 def test_grep_matches_hwid_and_description() -> None:
