@@ -683,6 +683,28 @@ class BaseSerial(io.RawIOBase):
         if update.dsrdtr is not None:
             self._dsrdtr = update.dsrdtr
 
+    @contextmanager
+    def _staged_settings(self, update: PortSettingsUpdate) -> Iterator[None]:
+        """Record the update for the backend to read, undoing it if applying fails."""
+        previous = self._all_settings()
+        self._store_settings_update(update)
+
+        try:
+            yield
+        # Not `BaseException`: a cancelled reconfigure may still be applied by the executor
+        except Exception:
+            # Only the fields in the update were changed, so only those are restored
+            self._store_settings_update(
+                PortSettingsUpdate(
+                    **{
+                        field.name: getattr(previous, field.name)
+                        for field in dataclasses.fields(update)
+                        if getattr(update, field.name) is not None
+                    }
+                )
+            )
+            raise
+
     def _set_deprecated(
         self, name: str, kwarg: str, update: PortSettingsUpdate
     ) -> None:
@@ -701,9 +723,11 @@ class BaseSerial(io.RawIOBase):
                 stacklevel=3,
             )
 
-        self._store_settings_update(update)
+        if not self.is_open:
+            self._store_settings_update(update)
+            return
 
-        if self.is_open:
+        with self._staged_settings(update):
             self._reconfigure_port(update)
 
     @maybe_wrap_exceptions
@@ -733,8 +757,8 @@ class BaseSerial(io.RawIOBase):
             rtscts=rtscts,
             dsrdtr=dsrdtr,
         )
-        self._store_settings_update(update)
-        self._reconfigure_port(update)
+        with self._staged_settings(update):
+            self._reconfigure_port(update)
 
     @abstractmethod
     def _reconfigure_port(self, update: PortSettingsUpdate) -> None:
@@ -1553,8 +1577,8 @@ class BaseSerialTransport(asyncio.Transport):
             rtscts=rtscts,
             dsrdtr=dsrdtr,
         )
-        self._serial._store_settings_update(update)
-        await self._reconfigure_port(update)
+        with self._serial._staged_settings(update):
+            await self._reconfigure_port(update)
 
     @abstractmethod
     async def _reconfigure_port(self, update: PortSettingsUpdate) -> None:
