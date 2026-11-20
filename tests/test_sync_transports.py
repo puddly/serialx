@@ -1,6 +1,7 @@
 """Sync transport tests."""
 
 from asyncio import IncompleteReadError
+import io
 import logging
 import os
 import sys
@@ -143,6 +144,23 @@ def test_sync_writelines(serial_pair: SerialPair) -> None:
     ):
         left.writelines([b"foo", b"bar", b"baz"])
         assert right.readexactly(9) == b"foobarbaz"
+
+
+def test_sync_io_wrappers(serial_pair: SerialPair) -> None:
+    """Test the port works inside `io` buffered and text wrappers."""
+    with (
+        Serial.from_url(serial_pair.left, baudrate=115200) as left,
+        Serial.from_url(serial_pair.right, baudrate=115200, read_timeout=1.0) as right,
+    ):
+        assert left.readable()
+        assert left.writable()
+
+        # typeshed wants a `name` attribute, which `BufferedRWPair` doesn't have
+        pair = io.BufferedRWPair(left, left)
+        text = io.TextIOWrapper(pair, newline="\n")  # type: ignore[type-var]
+        text.write("hello\n")
+        text.flush()
+        assert io.BufferedReader(right).readline() == b"hello\n"
 
 
 def test_sync_overlapping_read_write(serial_pair: SerialPair) -> None:
@@ -540,6 +558,22 @@ def test_sync_close_is_idempotent(serial_pair: SerialPair) -> None:
     serial.close()
 
     # Second close should be no-op
+    serial.close()
+
+
+def test_sync_closed_follows_open_state(serial_pair: SerialPair) -> None:
+    """Test `closed` reflects the port state and the port can be reopened."""
+    serial = Serial.from_url(serial_pair.left, baudrate=115200)
+    assert serial.closed
+
+    serial.open()
+    assert not serial.closed
+
+    serial.close()
+    assert serial.closed
+
+    serial.open()
+    assert not serial.closed
     serial.close()
 
 

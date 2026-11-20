@@ -1048,6 +1048,19 @@ class BaseSerial(io.RawIOBase):
         """Return whether the serial port is open."""
         raise NotImplementedError
 
+    @property
+    def closed(self) -> bool:
+        """Return whether the serial port is closed, for `io` wrappers."""
+        return not self.is_open
+
+    def readable(self) -> bool:
+        """Return True, a serial port supports reading."""
+        return True
+
+    def writable(self) -> bool:
+        """Return True, a serial port supports writing."""
+        return True
+
     # Deprecated aliases
     @property
     def port(self) -> str | None:
