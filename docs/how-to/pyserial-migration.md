@@ -76,6 +76,11 @@ are listed in the [main API documentation](../api.md). The most common ones are 
 | `rtscts = X`                | `reconfigure_port(rtscts=X)` | Read-only                                |
 | `xonxoff = X`               | `reconfigure_port(xonxoff=X)` | Read-only                               |
 | `dsrdtr = X`                | `reconfigure_port(dsrdtr=X)` | Read-only                                |
+| `parity = X`                | `reconfigure_port(parity=X)` | Read-only                                |
+| `bytesize = X`              | `reconfigure_port(byte_size=X)` | Read-only                             |
+| `stopbits = X`              | `reconfigure_port(stopbits=X)` | Read-only                              |
+| `write_timeout = X`         | `write(data, timeout=X)`   | Read-only; or `write_timeout=X` on construction |
+| `port = X`                  | `serial_for_url(url, ...)` | Read-only                                    |
 | `SerialPortInfo[i]`         | attribute access           | Slicing `SerialPortInfo` is deprecated       |
 | `SerialPortInfo.description`| `SerialPortInfo.product`   |                                              |
 
