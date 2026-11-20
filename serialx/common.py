@@ -993,6 +993,14 @@ class BaseSerial(io.RawIOBase):
 
         return bytes(buffer)
 
+    def __repr__(self) -> str:
+        """Return a debug representation."""
+        path = None if self._path is None else redact_uri(str(self._path))
+        return (
+            f"<{type(self).__name__} path={path!r} baudrate={self._baudrate!r}"
+            f" open={self.is_open!r}>"
+        )
+
     def __enter__(self) -> Self:
         """Enter context manager."""
         self.open()
