@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+import os
+import socket
+import sys
+
 import pytest
 import serial
 import serial.serialutil
@@ -71,3 +75,38 @@ def test_serialx_serial_does_not_wrap_exceptions() -> None:
 
     with pytest.raises(FileNotFoundError):
         port.open()
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="Uses a POSIX pty")
+def test_compat_break_condition_and_send_break() -> None:
+    """pyserial-style `break_condition` and `send_break` work unchanged."""
+    import pty  # noqa: PLC0415
+
+    controller, device = pty.openpty()
+    try:
+        with serial.serial_for_url(os.ttyname(device), baudrate=115200) as port:
+            assert port.break_condition is False
+            port.break_condition = True
+            assert port.break_condition is True
+            port.break_condition = False
+            assert port.break_condition is False
+            port.send_break(duration=0.01)
+            assert port.break_condition is False
+    finally:
+        os.close(controller)
+        os.close(device)
+
+
+def test_compat_break_unsupported_raises_serial_exception() -> None:
+    """Backends without break support raise `SerialException`, not silently pass."""
+    with socket.create_server(("127.0.0.1", 0)) as server:
+        host, port_number = server.getsockname()[:2]
+
+        with serial.serial_for_url(f"socket://{host}:{port_number}") as port:
+            with pytest.raises(serial.SerialException):
+                port.break_condition = True
+
+            with pytest.raises(serial.SerialException):
+                port.send_break(duration=0.01)
+
+            assert port.break_condition is False

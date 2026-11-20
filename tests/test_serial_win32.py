@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import errno
 import sys
+from unittest.mock import patch
 
 import pytest
 
@@ -20,7 +21,9 @@ from serialx.platforms.serial_win32 import Win32Serial
 INVALID_HANDLE = -1
 
 
-@pytest.mark.parametrize("name", ["GetCommModemStatus", "ClearCommError"])
+@pytest.mark.parametrize(
+    "name", ["GetCommModemStatus", "ClearCommError", "SetCommBreak", "ClearCommBreak"]
+)
 def test_win32_failure_raises_os_error(name: str) -> None:
     """A real pywin32 failure surfaces as `OSError` with the Win32 code in `winerror`."""
     func = getattr(_win32api, name)
@@ -44,3 +47,29 @@ def test_close_tolerates_failing_win32_calls() -> None:
     port.close()
 
     assert not port.is_open
+
+
+def test_break_condition_uses_set_and_clear_comm_break() -> None:
+    """Break maps to `SetCommBreak`/`ClearCommBreak` on the port handle."""
+    port = Win32Serial()
+    port._handle = 1234
+
+    with (
+        patch("serialx.platforms.serial_win32.SetCommBreak") as set_break,
+        patch("serialx.platforms.serial_win32.ClearCommBreak") as clear_break,
+        patch("serialx.common.time.sleep") as sleep,
+    ):
+        port.break_condition = True
+        set_break.assert_called_once_with(1234)
+        assert port.break_condition is True
+
+        port.break_condition = False
+        clear_break.assert_called_once_with(1234)
+        assert port.break_condition is False
+
+        port.send_break(0.1)
+        sleep.assert_called_once_with(0.1)
+        assert set_break.call_count == 2
+        assert clear_break.call_count == 2
+
+    port._handle = None

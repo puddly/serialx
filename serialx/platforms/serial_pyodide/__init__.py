@@ -154,8 +154,8 @@ class PyodideSerialTransport(BaseSerialTransport):
         .. warning::
             The Web Serial API only accepts port settings on open, so
             :meth:`reconfigure_port` closes and reopens the browser port. This drops
-            DTR and RTS, discards unread bytes in the browser's receive buffer, and
-            logs a warning. See :doc:`/how-to/pyodide`.
+            DTR and RTS, releases a held break, discards unread bytes in the browser's
+            receive buffer, and logs a warning. See :doc:`/how-to/pyodide`.
         """
         super().__init__(loop, protocol)
 
@@ -290,7 +290,16 @@ class PyodideSerialTransport(BaseSerialTransport):
                 await self._reader_task
 
         await self._js_port.close()
+
+        assert self._serial is not None
+        was_break = self._serial._break_condition
+        self._serial._break_condition = False
+
         await self._open_js_port()
+
+        # Do not rely on the reopen to release a held break
+        if was_break:
+            await self._set_break_condition(False)
 
     async def _drain_writer(self) -> None:
         """Let queued writes finish, then release the JS writer."""
@@ -371,6 +380,11 @@ class PyodideSerialTransport(BaseSerialTransport):
             self._dtr_state = modem_pins.dtr
         if modem_pins.rts is not PinState.UNDEFINED:
             self._rts_state = modem_pins.rts
+
+    async def _set_break_condition(self, enabled: bool) -> None:
+        """Set or clear the break condition, internal."""
+        assert self._js_port is not None
+        await self._js_port.setSignals(**{"break": enabled})
 
     def write(self, data: bytes | bytearray | memoryview) -> None:
         """Write data to the transport."""

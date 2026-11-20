@@ -21,6 +21,7 @@ from serialx import (
     Parity,
     PinState,
     StopBits,
+    UnsupportedSetting,
     create_serial_connection,
     get_serial_classes,
     open_serial_connection,
@@ -416,6 +417,44 @@ async def test_async_invalid_byte_size(serial_pair: SerialPair) -> None:
             serial_pair.left, baudrate=115200, byte_size=123
         ):
             pass
+
+
+async def test_async_break_condition(serial_pair: SerialPair) -> None:
+    """Test setting and clearing the break condition, and data flow afterwards."""
+    async with async_create_serial_pair(
+        serial_pair.left, serial_pair.right, baudrate=115200
+    ) as (left, right):
+        assert left.break_condition is False
+
+        if SerialQuirk.NO_BREAK in serial_pair.quirks:
+            with pytest.raises(UnsupportedSetting):
+                await left.set_break_condition(True)
+
+            with pytest.raises(UnsupportedSetting):
+                await left.send_break(0.01)
+
+            assert left.break_condition is False
+            return
+
+        await left.set_break_condition(True)
+        assert left.break_condition is True
+        assert left.transport.break_condition is True
+
+        # A break shorter than a character is not received as a NUL byte
+        await asyncio.sleep(0.01)
+        await left.set_break_condition(False)
+        assert left.break_condition is False
+
+        await left.transport.send_break(0.05)
+        await left.send_break(0.05)
+        assert left.break_condition is False
+
+        # Real UARTs receive a break as a NUL byte
+        data = b"after break"
+        left.write_nowait(data)
+        received = await right.readuntil(data)
+        assert received.endswith(data)
+        assert received[: -len(data)].strip(b"\x00") == b""
 
 
 @pytest.mark.parametrize("xonxoff", [True, False])

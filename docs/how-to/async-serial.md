@@ -85,6 +85,18 @@ pins = await serial.get_modem_pins()
 assert pins.rts is serialx.PinState.HIGH
 ```
 
+### Break
+`send_break` holds the TX line low for `duration` seconds, `set_break_condition`
+holds or releases it:
+
+```python
+await serial.send_break(duration=0.025)
+
+await serial.set_break_condition(True)
+await asyncio.sleep(0.025)
+await serial.set_break_condition(False)
+```
+
 ### Reconfiguring
 `reconfigure_port` changes settings on the open port. Only the settings passed are
 changed:

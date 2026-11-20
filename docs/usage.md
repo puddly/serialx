@@ -80,6 +80,35 @@ await serial.reconfigure_port(baudrate=9600)
 await transport.reconfigure_port(baudrate=9600)
 ```
 
+## Sending a break
+A break holds the TX line low for longer than a character, a signal outside the data
+stream that devices use to wake up, reset, or mark the start of a frame. `send_break`
+holds it for `duration` seconds (0.25 by default), and `break_condition` holds or
+releases it for manual timing:
+
+```python
+serial.send_break(duration=0.025)
+
+serial.break_condition = True
+time.sleep(0.025)
+serial.break_condition = False
+```
+
+The async APIs expose the same as coroutines:
+
+```python
+await serial.send_break(duration=0.025)
+await transport.set_break_condition(True)
+await transport.set_break_condition(False)
+```
+
+A break does not wait for pending output; `flush` first to send it before the break.
+Closing the port does not release a held break, and whether the line stays low depends
+on the driver, so release it before closing.
+Break is supported on POSIX, Windows, RFC 2217, and Web Serial ports. A plain socket
+and the ESPHome serial proxy have no way to carry a break, so those backends raise
+`serialx.UnsupportedSetting`.
+
 ## Listing ports
 `list_serial_ports` returns a `SerialPortInfo` per port. A USB serial number is
 only an identifier when the vendor programmed a distinct one: clones, unprogrammed
