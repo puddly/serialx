@@ -1,6 +1,8 @@
 """Tests for pyserial API compatibility shims."""
 
+from pathlib import Path
 import sys
+from unittest.mock import patch
 
 import pytest
 
@@ -30,7 +32,8 @@ from serialx import (
     SerialException,
     SerialPortInfo,
 )
-from serialx.tools.list_ports import comports, grep
+from serialx.tools import list_ports
+from serialx.tools.list_ports import comports, grep, hwid
 from serialx.tools.list_ports_common import ListPortInfo
 from tests.common import SerialPair
 
@@ -259,3 +262,66 @@ def test_compat_tools_module() -> None:
     results = list(grep(".*"))
     for result in results:
         assert isinstance(result, SerialPortInfo)
+
+
+def _port(device: str, **kwargs: object) -> SerialPortInfo:
+    fields: dict[str, object] = {
+        "resolved_device": device,
+        "vid": None,
+        "pid": None,
+        "serial_number": None,
+        "manufacturer": None,
+        "product": None,
+        "bcd_device": None,
+        "interface_description": None,
+        "interface_num": None,
+    }
+    fields.update(kwargs)
+    return SerialPortInfo(device=device, **fields)  # type: ignore[arg-type]
+
+
+def test_hwid_matches_pyserial_format() -> None:
+    """`hwid` formats a port's hardware ID like pyserial's `ListPortInfo.hwid`."""
+    usb = _port("/dev/ttyUSB0", vid=0x0403, pid=0x6001, serial_number="AB12CD34")
+    assert hwid(usb) == "USB VID:PID=0403:6001 SER=AB12CD34"  # codespell:ignore ser
+    assert (
+        hwid(_port("/dev/ttyUSB1", vid=0x10C4, pid=0xEA60)) == "USB VID:PID=10C4:EA60"
+    )
+    assert hwid(_port("/dev/ttyS0")) == "n/a"
+
+
+def test_grep_matches_hwid_and_description() -> None:
+    """`grep` searches the device, the description and the hardware ID."""
+    ftdi = _port(
+        "/dev/ttyUSB0",
+        vid=0x0403,
+        pid=0x6001,
+        serial_number="AB12CD34",
+        product="FT232R USB UART",
+    )
+    other = _port("/dev/ttyS0")
+
+    with patch(
+        "serialx.tools.list_ports.list_serial_ports", return_value=[ftdi, other]
+    ):
+        assert list(grep("0403:6001")) == [ftdi]
+        assert list(grep("ab12cd34")) == [ftdi]
+        assert list(grep("FT232R")) == [ftdi]
+        assert list(grep("ttyS")) == [other]
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="Needs symlinks")
+def test_comports_include_links(tmp_path: Path) -> None:
+    """`include_links` adds the symlinks that point at a listed port."""
+    device = tmp_path / "ttyUSB0"
+    device.touch()
+    (tmp_path / "kkl").symlink_to(device)
+    (tmp_path / "unrelated").symlink_to(tmp_path / "missing")
+    port = _port(str(device))
+
+    with patch("serialx.tools.list_ports.list_serial_ports", return_value=[port]):
+        assert comports() == [port]
+        assert comports(include_links=True)[0] == port
+        assert list_ports._list_links([port], dev_dir=str(tmp_path)) == [
+            _port(str(tmp_path / "kkl"), resolved_device=str(device))
+        ]
