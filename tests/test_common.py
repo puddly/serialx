@@ -202,7 +202,8 @@ class _StubSerial(BaseSerial):
     def _set_modem_pins(self, modem_pins: Any) -> None: ...
 
     @property
-    def is_open(self) -> bool: ...  # type:ignore[empty-body]
+    def is_open(self) -> bool:
+        return True
 
     @property
     def num_unread_bytes(self) -> int: ...  # type:ignore[empty-body, override]

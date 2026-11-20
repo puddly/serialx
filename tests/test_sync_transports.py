@@ -1,6 +1,7 @@
 """Sync transport tests."""
 
 from asyncio import IncompleteReadError
+from collections.abc import Callable
 import io
 import logging
 import os
@@ -15,7 +16,15 @@ if sys.platform == "emscripten":
         allow_module_level=True,
     )
 
-from serialx import ModemPins, Parity, PinState, Serial, StopBits, serial_for_url
+from serialx import (
+    ModemPins,
+    Parity,
+    PinState,
+    Serial,
+    SerialException,
+    StopBits,
+    serial_for_url,
+)
 from tests.common import (
     SerialBackend,
     SerialPair,
@@ -586,6 +595,40 @@ def test_sync_repr_follows_open_state(serial_pair: SerialPair) -> None:
         assert repr(serial).endswith(" baudrate=115200 open=True>")
 
     assert repr(serial).endswith(" open=False>")
+
+
+NOT_OPEN_OPERATIONS: dict[str, Callable[[Serial], object]] = {
+    "read": lambda serial: serial.read(1),
+    "readline": lambda serial: serial.readline(),
+    "write": lambda serial: serial.write(b"x"),
+    "flush": lambda serial: serial.flush(),
+    "reset_read_buffer": lambda serial: serial.reset_read_buffer(),
+    "reset_write_buffer": lambda serial: serial.reset_write_buffer(),
+    "in_waiting": lambda serial: serial.in_waiting,
+    "out_waiting": lambda serial: serial.out_waiting,
+    "get_modem_pins": lambda serial: serial.get_modem_pins(),
+    "set_modem_pins": lambda serial: serial.set_modem_pins(dtr=True),
+}
+
+
+@pytest.mark.parametrize("operation", NOT_OPEN_OPERATIONS)
+def test_sync_never_opened_port_raises(serial_pair: SerialPair, operation: str) -> None:
+    """Using a port that was never opened raises `SerialException`."""
+    serial = Serial.from_url(serial_pair.left, baudrate=115200)
+
+    with pytest.raises(SerialException, match="not open"):
+        NOT_OPEN_OPERATIONS[operation](serial)
+
+
+@pytest.mark.parametrize("operation", NOT_OPEN_OPERATIONS)
+def test_sync_closed_port_raises(serial_pair: SerialPair, operation: str) -> None:
+    """Using a port after closing it raises `SerialException`."""
+    serial = Serial.from_url(serial_pair.left, baudrate=115200)
+    serial.open()
+    serial.close()
+
+    with pytest.raises(SerialException, match="not open"):
+        NOT_OPEN_OPERATIONS[operation](serial)
 
 
 def test_sync_context_manager_multiple_times(serial_pair: SerialPair) -> None:
