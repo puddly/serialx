@@ -577,6 +577,17 @@ def test_sync_closed_follows_open_state(serial_pair: SerialPair) -> None:
     serial.close()
 
 
+def test_sync_repr_follows_open_state(serial_pair: SerialPair) -> None:
+    """Test repr() shows whether the port is open."""
+    serial = Serial.from_url(serial_pair.left, baudrate=115200)
+    assert repr(serial).endswith(" baudrate=115200 open=False>")
+
+    with serial:
+        assert repr(serial).endswith(" baudrate=115200 open=True>")
+
+    assert repr(serial).endswith(" open=False>")
+
+
 def test_sync_context_manager_multiple_times(serial_pair: SerialPair) -> None:
     """Test that context manager can be used multiple times."""
     left = Serial.from_url(serial_pair.left, baudrate=115200)

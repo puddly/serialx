@@ -13,6 +13,7 @@ import pytest
 
 from serialx import (
     Platform,
+    Serial,
     async_list_serial_ports,
     get_serial_classes,
     is_non_unique_serial,
@@ -166,6 +167,14 @@ def test_register_uri_handler_dispatch_and_unregister() -> None:
 def test_redact_uri(uri: str, expected: str) -> None:
     """Secret query parameters are redacted and other parameters are kept as-is."""
     assert redact_uri(uri) == expected
+
+
+def test_serial_repr_unopened() -> None:
+    """repr() works on an unopened port and shows its class, path and state."""
+    serial = Serial.from_url("socket://1.2.3.4:5678", baudrate=115200)
+    assert repr(serial) == (
+        "<SocketSerial path='socket://1.2.3.4:5678' baudrate=115200 open=False>"
+    )
 
 
 def test_backend_connect_kwargs_match_typed_dict() -> None:

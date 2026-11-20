@@ -13,6 +13,7 @@ if sys.platform != "emscripten":
 
 from serialx import Parity, StopBits, create_serial_connection
 from serialx.common import SerialException, UnsupportedSetting
+from serialx.platforms.serial_pyodide import PyodideSerial
 from tests.common import create_pyodide_pair
 
 
@@ -53,6 +54,14 @@ async def test_pyodide_invalid_byte_size_unsupported() -> None:
                 baudrate=115200,
                 byte_size=5,
             )
+
+
+def test_pyodide_serial_repr() -> None:
+    """repr() works on the settings-only sync class."""
+    serial = PyodideSerial("pyodide://port0", baudrate=115200)
+    assert repr(serial) == (
+        "<PyodideSerial path='pyodide://port0' baudrate=115200 open=False>"
+    )
 
 
 async def test_pyodide_unregistered_port_raises() -> None:

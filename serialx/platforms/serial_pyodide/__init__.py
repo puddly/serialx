@@ -130,8 +130,8 @@ class PyodideSerial(BaseSerial):
 
     @property
     def is_open(self) -> bool:
-        """Return whether the port is open."""
-        raise NotImplementedError()
+        """Return False, the transport only uses this class to hold settings."""
+        return False
 
 
 class PyodideSerialTransport(BaseSerialTransport):
