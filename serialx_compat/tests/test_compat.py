@@ -65,6 +65,16 @@ def test_compat_serial_for_url_wraps_exceptions() -> None:
     assert isinstance(exc_info.value.__cause__, FileNotFoundError)
 
 
+def test_compat_serial_not_open_raises() -> None:
+    """Reading a port that is not open raises pyserial's `SerialException`."""
+    port = serial.Serial.from_url("/nonexistent/serialx-compat/path")
+
+    with pytest.raises(
+        serial.SerialException, match="^Attempting to use a port that is not open$"
+    ):
+        port.read(1)
+
+
 def test_serialx_serial_does_not_wrap_exceptions() -> None:
     """The underlying `serialx.Serial` leaves the original exception untouched."""
     port = serialx.Serial.from_url("/nonexistent/serialx-compat/path")

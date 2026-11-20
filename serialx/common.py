@@ -601,6 +601,10 @@ class BaseSerial(io.RawIOBase):
         if self._broken is None:
             self._broken = exc
 
+    def _check_open(self) -> None:
+        if not self.is_open:
+            raise SerialException("Attempting to use a port that is not open")
+
     def _check_broken(self) -> None:
         if self._broken is None:
             return
@@ -773,6 +777,7 @@ class BaseSerial(io.RawIOBase):
     @maybe_wrap_exceptions
     def get_modem_pins(self) -> ModemPins:
         """Get modem control bits."""
+        self._check_open()
         self._check_broken()
         pins = self._get_modem_pins()
         return dataclasses.replace(
@@ -811,6 +816,7 @@ class BaseSerial(io.RawIOBase):
         dsr: PinState | bool | None = PinState.UNDEFINED,
     ) -> None:
         """Set modem control bits."""
+        self._check_open()
         self._check_broken()
 
         pins = modem_pins
@@ -848,6 +854,7 @@ class BaseSerial(io.RawIOBase):
     @maybe_wrap_exceptions
     def readinto(self, b: Buffer, *, timeout: float | None = None) -> int:
         """Read bytes from serial port into buffer."""
+        self._check_open()
         self._check_broken()
         effective_timeout = self._read_timeout if timeout is None else timeout
         return self._readinto(b, timeout=effective_timeout)
@@ -860,6 +867,7 @@ class BaseSerial(io.RawIOBase):
     @maybe_wrap_exceptions
     def write(self, data: Buffer, *, timeout: float | None = None) -> int:
         """Write bytes to serial port."""
+        self._check_open()
         self._check_broken()
         effective_timeout = self._write_timeout if timeout is None else timeout
         return self._write(data, timeout=effective_timeout)
@@ -871,6 +879,7 @@ class BaseSerial(io.RawIOBase):
 
     def flush(self) -> None:
         """Flush write buffers."""
+        self._check_open()
         self._check_broken()
         self._flush()
 
@@ -1033,6 +1042,7 @@ class BaseSerial(io.RawIOBase):
     @maybe_wrap_exceptions
     def reset_read_buffer(self) -> None:
         """Reset the read buffer."""
+        self._check_open()
         self._reset_read_buffer()
 
     @abstractmethod
@@ -1043,6 +1053,7 @@ class BaseSerial(io.RawIOBase):
     @maybe_wrap_exceptions
     def reset_write_buffer(self) -> None:
         """Reset the write buffer."""
+        self._check_open()
         self._reset_write_buffer()
 
     @abstractmethod

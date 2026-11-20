@@ -124,10 +124,12 @@ class SocketSerial(BaseSerial):
 
     def num_unread_bytes(self) -> int:
         """Return the number of bytes waiting to be read."""
+        self._check_open()
         return 0
 
     def num_unwritten_bytes(self) -> int:
         """Return the number of bytes waiting to be written."""
+        self._check_open()
         return 0
 
     def _reset_read_buffer(self) -> None:
