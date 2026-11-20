@@ -13,7 +13,12 @@ if sys.platform != "win32":
     pytest.skip("Windows-only tests", allow_module_level=True)
 
 import pywintypes
-from win32con import DTR_CONTROL_DISABLE, RTS_CONTROL_DISABLE
+from win32con import (
+    DTR_CONTROL_DISABLE,
+    DTR_CONTROL_HANDSHAKE,
+    RTS_CONTROL_DISABLE,
+    RTS_CONTROL_HANDSHAKE,
+)
 from winerror import ERROR_INVALID_HANDLE
 
 from serialx.platforms import _win32api
@@ -77,5 +82,35 @@ def test_reconfigure_keeps_modem_pins() -> None:
     assert dcbs[-1].fRtsControl == RTS_CONTROL_DISABLE
     assert dcbs[-1].fDtrControl == DTR_CONTROL_DISABLE
     assert {c.args[1] for c in escape.call_args_list} == {CLRRTS, CLRDTR}
+
+    port._handle = None
+
+
+def test_reconfigure_leaves_flow_control_pins_to_the_driver() -> None:
+    """With RTS/CTS and DSR/DTR flow control, the driver keeps DTR/RTS."""
+    port = Win32Serial(baudrate=9600, rtscts=True, dsrdtr=True)
+    port._handle = 1234
+    dcbs = []
+
+    with (
+        patch(
+            "serialx.platforms.serial_win32.GetCommState",
+            return_value=SimpleNamespace(),
+        ),
+        patch(
+            "serialx.platforms.serial_win32.SetCommState",
+            side_effect=lambda h, dcb: dcbs.append(dcb),
+        ),
+        patch("serialx.platforms.serial_win32.SetCommTimeouts"),
+        patch("serialx.platforms.serial_win32.ClearCommError"),
+        patch("serialx.platforms.serial_win32.EscapeCommFunction") as escape,
+    ):
+        port.reconfigure_port(baudrate=19200)
+
+    assert dcbs[-1].fRtsControl == RTS_CONTROL_HANDSHAKE
+    assert dcbs[-1].fOutxCtsFlow == 1
+    assert dcbs[-1].fDtrControl == DTR_CONTROL_HANDSHAKE
+    assert dcbs[-1].fOutxDsrFlow == 1
+    escape.assert_not_called()
 
     port._handle = None
