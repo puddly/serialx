@@ -1154,6 +1154,27 @@ def test_dtr_dsr(serial_pair: SerialPair) -> None:
 
 
 @pytest.mark.skip_quirks(SerialQuirk.NO_RTS_CTS)
+def test_reconfigure_keeps_modem_pins(serial_pair: SerialPair) -> None:
+    """Test that reconfiguring an open port keeps RTS (and DTR) as last set."""
+    check_dtr = SerialQuirk.NO_DTR_DSR not in serial_pair.quirks
+
+    with (
+        Serial.from_url(serial_pair.left, baudrate=115200) as left,
+        Serial.from_url(serial_pair.right, baudrate=115200) as right,
+    ):
+        left.set_modem_pins(rts=False, dtr=False if check_dtr else None)
+        time.sleep(serial_pair.modem_line_propagation_delay)
+        assert right.get_modem_pins().cts is PinState.LOW
+
+        left.reconfigure_port(baudrate=9600)
+        time.sleep(serial_pair.modem_line_propagation_delay)
+        assert right.get_modem_pins().cts is PinState.LOW
+
+        if check_dtr:
+            assert right.get_modem_pins().dsr is PinState.LOW
+
+
+@pytest.mark.skip_quirks(SerialQuirk.NO_RTS_CTS)
 def test_deprecated_null_modem_pins(serial_pair: SerialPair) -> None:
     """Test null modem cross-port behavior via deprecated property aliases."""
 

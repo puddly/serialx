@@ -637,9 +637,12 @@ class BaseSerial(io.RawIOBase):
     def open(self) -> None:
         """Open the serial port."""
         self._broken = None
+        self._dtr_state = PinState.UNDEFINED
+        self._rts_state = PinState.UNDEFINED
         try:
             self._open()
             self._reconfigure_port(self._all_settings())
+            self._after_open()
         except BaseException:
             self.close()
             raise
@@ -648,6 +651,9 @@ class BaseSerial(io.RawIOBase):
     def _open(self) -> None:
         """Open the serial port (platform-specific)."""
         raise NotImplementedError
+
+    def _after_open(self) -> None:
+        """Finish opening once the port is configured (platform-specific)."""
 
     def _all_settings(self) -> PortSettingsUpdate:
         return PortSettingsUpdate(
@@ -781,11 +787,19 @@ class BaseSerial(io.RawIOBase):
             rts=pins.rts if pins.rts is not PinState.UNDEFINED else self._rts_state,
         )
 
-    def _modem_pins_on_open(self) -> ModemPins:
-        """DTR/RTS to apply on open."""
+    def _modem_pins_to_apply(self) -> ModemPins:
+        """DTR/RTS to apply after configuring: the last-written state, else on-open."""
+        dtr = self._dtr_state
+        if dtr is PinState.UNDEFINED:
+            dtr = self._dtr_on_open
+
+        rts = self._rts_state
+        if rts is PinState.UNDEFINED:
+            rts = self._rts_on_open
+
         return ModemPins(
-            dtr=self._dtr_on_open if not self._dsrdtr else PinState.UNDEFINED,
-            rts=self._rts_on_open if not self._rtscts else PinState.UNDEFINED,
+            dtr=dtr if not self._dsrdtr else PinState.UNDEFINED,
+            rts=rts if not self._rtscts else PinState.UNDEFINED,
         )
 
     def _modem_pins_on_close(self) -> ModemPins:
