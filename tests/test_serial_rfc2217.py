@@ -2,6 +2,7 @@
 
 import asyncio
 import sys
+from unittest.mock import patch
 
 import pytest
 
@@ -13,7 +14,7 @@ if sys.platform == "emscripten":
 
 from serialx import Serial, SerialException, create_serial_connection
 from serialx.common import PortSettingsUpdate, UnsupportedSetting, measure_time
-from serialx.platforms.serial_rfc2217 import Rfc2217
+from serialx.platforms.serial_rfc2217 import Rfc2217, RFC2217Serial
 from serialx.platforms.serial_rfc2217.types import (
     FlowcontrolResumeCmd,
     FlowcontrolSuspendCmd,
@@ -21,6 +22,8 @@ from serialx.platforms.serial_rfc2217.types import (
     ModemStateFlag,
     NotifyLinestateCmd,
     NotifyModemstateCmd,
+    PurgeDataCmd,
+    PurgeDataValue,
     SignatureCmd,
     TelnetOption,
     WillCmd,
@@ -81,6 +84,24 @@ def test_invalid_byte_size_rejected_before_sending() -> None:
     engine = Rfc2217()
     with pytest.raises(UnsupportedSetting):
         list(engine.build_port_config_commands(PortSettingsUpdate(byte_size=123)))
+
+
+def test_reset_buffers_purge_the_matching_server_buffer() -> None:
+    """Reading purges the server's receive buffer, writing its transmit buffer."""
+    port = RFC2217Serial("rfc2217://127.0.0.1:1")
+    port._data_buffer.extend(b"unread")
+    sent: list[PurgeDataCmd] = []
+
+    with patch.object(port, "_send_and_wait", side_effect=sent.append):
+        port.reset_read_buffer()
+        assert sent == [PurgeDataCmd(what=PurgeDataValue.RECEIVE)]
+        assert port._data_buffer == b""
+
+        port.reset_write_buffer()
+        assert sent[-1] == PurgeDataCmd(what=PurgeDataValue.TRANSMIT)
+
+    # RFC 2217: 1 purges the access server's receive buffer, 2 its transmit buffer
+    assert [cmd.to_bytes() for cmd in sent] == [b"\x01", b"\x02"]
 
 
 def test_sync_negotiate_timeout_silent_server() -> None:
