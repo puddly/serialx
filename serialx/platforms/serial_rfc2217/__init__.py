@@ -590,7 +590,7 @@ class RFC2217Serial(SocketSerial):
 
     def num_unread_bytes(self) -> int:
         """Return the number of buffered serial data bytes waiting to be read."""
-        self._check_open()
+        self._check_usable()
         return len(self._data_buffer)
 
     def _reset_write_buffer(self) -> None:
