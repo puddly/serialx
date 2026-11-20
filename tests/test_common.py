@@ -30,6 +30,7 @@ from serialx.common import (
     PortSettingsUpdate,
     SerialPortInfo,
     UnknownUriScheme,
+    UnsupportedSetting,
     get_uri_handler,
     route_backend_kwargs,
 )
@@ -454,3 +455,52 @@ async def test_async_list_serial_ports_all_platforms(platform: Platform) -> None
     assert isinstance(ports, list)
     for port in ports:
         assert isinstance(port, SerialPortInfo)
+
+
+class _FailingRtsCtsSerial(_StubSerial):
+    """An open stub whose backend rejects RTS/CTS after reading `self._*`."""
+
+    @property
+    def is_open(self) -> bool:
+        return True
+
+    def _reconfigure_port(self, update: PortSettingsUpdate) -> None:
+        if self._rtscts:
+            raise UnsupportedSetting("RTS/CTS not supported")
+
+
+def test_reconfigure_port_failure_restores_settings() -> None:
+    """A rejected update leaves the stored settings as they were."""
+    serial = _FailingRtsCtsSerial("/dev/null", baudrate=9600, do_not_open=True)
+
+    with pytest.raises(UnsupportedSetting) as excinfo:
+        serial.reconfigure_port(rtscts=True, baudrate=38400)
+
+    assert excinfo.value.__cause__ is None
+    assert excinfo.value.__context__ is None
+    assert serial._rtscts is False
+    assert serial.baudrate == 9600
+
+    # The rejected value no longer poisons later updates
+    serial.reconfigure_port(baudrate=19200)
+    assert serial.baudrate == 19200
+    assert serial._rtscts is False
+
+
+def test_deprecated_setter_failure_restores_settings() -> None:
+    """A rejected deprecated setter leaves the stored setting as it was."""
+
+    class FailingByteSizeSerial(_FailingRtsCtsSerial):
+        def _reconfigure_port(self, update: PortSettingsUpdate) -> None:
+            if self._byte_size != 8:
+                raise UnsupportedSetting("only 8 data bits")
+
+    serial = FailingByteSizeSerial("/dev/null", do_not_open=True)
+
+    with (
+        pytest.warns(DeprecationWarning),
+        pytest.raises(UnsupportedSetting),
+    ):
+        serial.data_bits = 7
+
+    assert serial.byte_size == 8
